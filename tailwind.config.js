@@ -4,10 +4,17 @@ export default {
   theme: {
     extend: {
       colors: {
-        primary: '#00a651',      // Bright Cal Poly green
-        secondary: '#1a3a52',    // Cal Poly blue/dark
-        accent: '#2980b9',       // Accent blue
-        calpoly: '#00a651',      // Main green
+        primary: "#3FA36F",
+        secondary: "#2A6E4A",
+        accent: "#5BAE7E",
+        calpoly: "#3FA36F",
+        butter: "#EEF9EA",
+        honey: "#BAE6C8",
+        amberSoft: "#6CBF84",
+        ink: "#173225",
+      },
+      boxShadow: {
+        phone: "0 24px 60px rgba(23, 50, 37, 0.18)",
       },
     },
   },
