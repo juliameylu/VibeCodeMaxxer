@@ -4,9 +4,10 @@ export default {
   theme: {
     extend: {
       colors: {
-        primary: "#8b5cf6",
-        secondary: "#ec4899",
-        accent: "#06b6d4",
+        primary: '#00a651',      // Bright Cal Poly green
+        secondary: '#1a3a52',    // Cal Poly blue/dark
+        accent: '#2980b9',       // Accent blue
+        calpoly: '#00a651',      // Main green
       },
     },
   },
