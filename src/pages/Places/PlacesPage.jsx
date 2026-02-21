@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { Search } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import MobileShell from "../../components/MobileShell";
 import PageShell from "../../components/ui/PageShell";
 import SectionHeader from "../../components/ui/SectionHeader";
@@ -8,6 +8,12 @@ import ChipRow from "../../components/ui/ChipRow";
 import EmptyState from "../../components/ui/EmptyState";
 import Skeleton from "../../components/ui/Skeleton";
 import { usePlacesSearch } from "../../lib/hooks/usePlacesSearch";
+import {
+  clearRecommendationProfile,
+  rankItems,
+  trackImpressionsOncePerSession,
+  trackRecommendationAction,
+} from "../../lib/recommendation/hybrid";
 import PlaceCard from "./components/PlaceCard";
 
 const CATEGORY_OPTIONS = [
@@ -40,6 +46,9 @@ export default function PlacesPage() {
   const [preferences, setPreferences] = useState([]);
   const [customPreference, setCustomPreference] = useState("");
   const [visibleCount, setVisibleCount] = useState(6);
+  const [likedIds, setLikedIds] = useState([]);
+  const [hiddenIds, setHiddenIds] = useState([]);
+  const [showAll, setShowAll] = useState(false);
 
   const filters = useMemo(
     () => ({
@@ -56,8 +65,35 @@ export default function PlacesPage() {
   );
 
   const { data, isLoading, error } = usePlacesSearch(filters);
-  const visibleItems = data.items.slice(0, visibleCount);
-  const hasMore = visibleCount < data.items.length || data.hasMore;
+  const ranking = useMemo(
+    () =>
+      rankItems({
+        namespace: "places-page",
+        items: data.items,
+        getId: (place) => place.id,
+        getText: (place) => `${place.name} ${place.category} ${place.address} ${place.price}`
+      }),
+    [data.items]
+  );
+
+  const rankedItems = useMemo(() => ranking.ranked.map((row) => row.item), [ranking.ranked]);
+  const baseItems = showAll ? data.items : rankedItems;
+  const filteredVisible = useMemo(
+    () => baseItems.filter((place) => !hiddenIds.includes(place.id)),
+    [baseItems, hiddenIds]
+  );
+  const visibleItems = filteredVisible.slice(0, visibleCount);
+  const hasMore = visibleCount < filteredVisible.length || data.hasMore;
+
+  useEffect(() => {
+    trackImpressionsOncePerSession({
+      namespace: "places-page",
+      items: filteredVisible,
+      getId: (place) => place.id,
+      getText: (place) => `${place.name} ${place.category} ${place.address} ${place.price}`,
+      limit: 8
+    });
+  }, [filteredVisible]);
 
   function togglePreference(value) {
     setVisibleCount(6);
@@ -77,11 +113,45 @@ export default function PlacesPage() {
     setVisibleCount(6);
   }
 
+  function toggleLike(place) {
+    setLikedIds((prev) => {
+      const nextLiked = !prev.includes(place.id);
+      if (nextLiked) {
+        trackRecommendationAction({
+          namespace: "places-page",
+          itemId: place.id,
+          text: `${place.name} ${place.category} ${place.address} ${place.price}`,
+          action: "like"
+        });
+      }
+      return nextLiked ? [...prev, place.id] : prev.filter((id) => id !== place.id);
+    });
+  }
+
+  function dismissPlace(place) {
+    trackRecommendationAction({
+      namespace: "places-page",
+      itemId: place.id,
+      text: `${place.name} ${place.category} ${place.address} ${place.price}`,
+      action: "dismiss"
+    });
+    setHiddenIds((prev) => [...new Set([...prev, place.id])]);
+  }
+
+  function onOpenPlace(place) {
+    trackRecommendationAction({
+      namespace: "places-page",
+      itemId: place.id,
+      text: `${place.name} ${place.category} ${place.address} ${place.price}`,
+      action: "open"
+    });
+  }
+
   return (
     <MobileShell showFab={false}>
       <SectionHeader
         title="Food & Coffee"
-        subtitle="Yelp-style search with filters and preference matching"
+        subtitle="Yelp-style search with caching and hybrid recommendations"
         action={<span className="chip chip-idle text-xs">{data.total} found</span>}
       />
 
@@ -93,6 +163,27 @@ export default function PlacesPage() {
 
       <PageShell>
         <section className="glass-card p-4 space-y-3">
+          <div className="flex flex-wrap gap-2">
+            <button className={`chip text-xs ${showAll ? "chip-idle" : "chip-active"}`} onClick={() => setShowAll(false)}>
+              Recommended
+            </button>
+            <button className={`chip text-xs ${showAll ? "chip-active" : "chip-idle"}`} onClick={() => setShowAll(true)}>
+              All
+            </button>
+            <button
+              className="chip chip-idle text-xs"
+              onClick={() => {
+                clearRecommendationProfile("places-page");
+                setLikedIds([]);
+                setHiddenIds([]);
+                setShowAll(false);
+              }}
+            >
+              Reset Profile
+            </button>
+            <span className="chip chip-idle text-xs">Interactions: {ranking.interactions}</span>
+          </div>
+
           <div className="relative">
             <Search size={16} className="absolute left-3 top-3 text-soft" />
             <input
@@ -217,11 +308,36 @@ export default function PlacesPage() {
           />
         ) : null}
 
+        {!isLoading && !error && data.items.length > 0 && filteredVisible.length === 0 ? (
+          <EmptyState
+            title="No visible recommendations"
+            message="You hid all current items. Reset profile or show all."
+            action={
+              <button
+                onClick={() => {
+                  setHiddenIds([]);
+                  setShowAll(true);
+                }}
+                className="chip chip-active text-xs"
+              >
+                Show All
+              </button>
+            }
+          />
+        ) : null}
+
         {!isLoading && !error && data.items.length > 0 ? (
           <>
             <div className="grid grid-cols-1 gap-3">
               {visibleItems.map((place) => (
-                <PlaceCard key={place.id} place={place} />
+                <PlaceCard
+                  key={place.id}
+                  place={place}
+                  liked={likedIds.includes(place.id)}
+                  onView={onOpenPlace}
+                  onToggleLike={toggleLike}
+                  onDismiss={dismissPlace}
+                />
               ))}
             </div>
 

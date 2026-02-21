@@ -33,12 +33,15 @@ export default function MainPage() {
           <Link to="/discover" className="chip chip-idle whitespace-nowrap">Discover</Link>
         </div>
 
-        <div className="mt-3 grid grid-cols-2 gap-2">
+        <div className="mt-3 grid grid-cols-3 gap-2">
           <Link to="/places" className="chip chip-idle text-center text-xs">
             Restaurants
           </Link>
           <Link to="/events" className="chip chip-idle text-center text-xs">
             Cal Poly NOW
+          </Link>
+          <Link to="/fremont-shows" className="chip chip-idle text-center text-xs">
+            Fremont Theater
           </Link>
         </div>
       </header>

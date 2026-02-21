@@ -7,6 +7,12 @@ import ChipRow from "../../components/ui/ChipRow";
 import Skeleton from "../../components/ui/Skeleton";
 import EmptyState from "../../components/ui/EmptyState";
 import { useCampusEvents } from "../../lib/hooks/useCampusEvents";
+import {
+  clearRecommendationProfile,
+  rankItems,
+  trackImpressionsOncePerSession,
+  trackRecommendationAction,
+} from "../../lib/recommendation/hybrid";
 import EventCard from "./components/EventCard";
 
 const TIME_OPTIONS = [
@@ -54,9 +60,39 @@ export default function EventsPage() {
   const [category, setCategory] = useState("all");
   const [query, setQuery] = useState("");
   const [savedIds, setSavedIds] = useState([]);
+  const [likedIds, setLikedIds] = useState([]);
+  const [hiddenIds, setHiddenIds] = useState([]);
+  const [showAll, setShowAll] = useState(false);
 
   const filters = useMemo(() => ({ timeRange, category, query }), [timeRange, category, query]);
   const { data, isLoading, error } = useCampusEvents(filters);
+  const ranking = useMemo(
+    () =>
+      rankItems({
+        namespace: "events-page",
+        items: data.items,
+        getId: (event) => event.id,
+        getText: (event) => `${event.title} ${event.category} ${event.location} ${event.description}`
+      }),
+    [data.items]
+  );
+
+  const rankedItems = useMemo(() => ranking.ranked.map((row) => row.item), [ranking.ranked]);
+  const baseItems = showAll ? data.items : rankedItems;
+  const visibleItems = useMemo(
+    () => baseItems.filter((event) => !hiddenIds.includes(event.id)),
+    [baseItems, hiddenIds]
+  );
+
+  useEffect(() => {
+    trackImpressionsOncePerSession({
+      namespace: "events-page",
+      items: visibleItems,
+      getId: (event) => event.id,
+      getText: (event) => `${event.title} ${event.category} ${event.location} ${event.description}`,
+      limit: 8
+    });
+  }, [visibleItems]);
 
   useEffect(() => {
     try {
@@ -72,6 +108,40 @@ export default function EventsPage() {
       const next = prev.includes(eventId) ? prev.filter((id) => id !== eventId) : [...prev, eventId];
       localStorage.setItem(SAVED_KEY, JSON.stringify(next));
       return next;
+    });
+  }
+
+  function toggleLike(event) {
+    setLikedIds((prev) => {
+      const nextLiked = !prev.includes(event.id);
+      if (nextLiked) {
+        trackRecommendationAction({
+          namespace: "events-page",
+          itemId: event.id,
+          text: `${event.title} ${event.category} ${event.location} ${event.description}`,
+          action: "like"
+        });
+      }
+      return nextLiked ? [...prev, event.id] : prev.filter((id) => id !== event.id);
+    });
+  }
+
+  function dismissEvent(event) {
+    trackRecommendationAction({
+      namespace: "events-page",
+      itemId: event.id,
+      text: `${event.title} ${event.category} ${event.location} ${event.description}`,
+      action: "dismiss"
+    });
+    setHiddenIds((prev) => [...new Set([...prev, event.id])]);
+  }
+
+  function onViewSource(event) {
+    trackRecommendationAction({
+      namespace: "events-page",
+      itemId: event.id,
+      text: `${event.title} ${event.category} ${event.location} ${event.description}`,
+      action: "open"
     });
   }
 
@@ -98,7 +168,7 @@ export default function EventsPage() {
     <MobileShell showFab={false}>
       <SectionHeader
         title="Cal Poly NOW Events"
-        subtitle="Fresh campus events with quick save and calendar export"
+        subtitle="Fresh campus events with caching and hybrid recommendations"
         action={<span className="chip chip-idle text-xs">{data.total} events</span>}
       />
 
@@ -110,6 +180,27 @@ export default function EventsPage() {
 
       <PageShell>
         <section className="glass-card p-4 space-y-3">
+          <div className="flex flex-wrap gap-2">
+            <button className={`chip text-xs ${showAll ? "chip-idle" : "chip-active"}`} onClick={() => setShowAll(false)}>
+              Recommended
+            </button>
+            <button className={`chip text-xs ${showAll ? "chip-active" : "chip-idle"}`} onClick={() => setShowAll(true)}>
+              All
+            </button>
+            <button
+              className="chip chip-idle text-xs"
+              onClick={() => {
+                clearRecommendationProfile("events-page");
+                setLikedIds([]);
+                setHiddenIds([]);
+                setShowAll(false);
+              }}
+            >
+              Reset Profile
+            </button>
+            <span className="chip chip-idle text-xs">Interactions: {ranking.interactions}</span>
+          </div>
+
           <div>
             <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-soft">Time Window</p>
             <ChipRow options={TIME_OPTIONS} value={timeRange} onChange={setTimeRange} />
@@ -152,15 +243,37 @@ export default function EventsPage() {
           />
         ) : null}
 
-        {!isLoading && !error && data.items.length > 0 ? (
+        {!isLoading && !error && data.items.length > 0 && visibleItems.length === 0 ? (
+          <EmptyState
+            title="No visible recommendations"
+            message="You hid all current items. Reset profile or show all."
+            action={
+              <button
+                onClick={() => {
+                  setHiddenIds([]);
+                  setShowAll(true);
+                }}
+                className="chip chip-active text-xs"
+              >
+                Show All
+              </button>
+            }
+          />
+        ) : null}
+
+        {!isLoading && !error && visibleItems.length > 0 ? (
           <div className="space-y-3">
-            {data.items.map((event) => (
+            {visibleItems.map((event) => (
               <EventCard
                 key={event.id}
                 event={event}
                 saved={savedIds.includes(event.id)}
+                liked={likedIds.includes(event.id)}
                 onToggleSave={toggleSaved}
                 onAddCalendar={downloadIcs}
+                onViewSource={onViewSource}
+                onToggleLike={toggleLike}
+                onDismiss={dismissEvent}
               />
             ))}
           </div>

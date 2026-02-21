@@ -5,7 +5,7 @@ function formatDistance(distanceMeters) {
   return `${(distanceMeters / 1000).toFixed(1)} km`;
 }
 
-export default function PlaceCard({ place }) {
+export default function PlaceCard({ place, liked = false, onView, onToggleLike, onDismiss }) {
   return (
     <Card className="p-0 overflow-hidden">
       <img
@@ -35,10 +35,19 @@ export default function PlaceCard({ place }) {
           href={place.url}
           target="_blank"
           rel="noreferrer"
+          onClick={() => onView?.(place)}
           className="mt-3 inline-flex text-xs font-semibold text-amberSoft"
         >
           View on Yelp
         </a>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <button onClick={() => onToggleLike?.(place)} className={`chip text-xs ${liked ? "chip-active" : "chip-idle"}`}>
+            {liked ? "Liked" : "Like"}
+          </button>
+          <button onClick={() => onDismiss?.(place)} className="chip chip-idle text-xs">
+            Hide
+          </button>
+        </div>
       </div>
     </Card>
   );

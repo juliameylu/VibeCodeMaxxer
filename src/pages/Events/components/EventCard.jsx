@@ -15,7 +15,16 @@ function formatTimeRange(startTime, endTime) {
   return `${day} · ${startLabel} - ${endLabel}`;
 }
 
-export default function EventCard({ event, saved, onToggleSave, onAddCalendar }) {
+export default function EventCard({
+  event,
+  saved,
+  liked = false,
+  onToggleSave,
+  onAddCalendar,
+  onViewSource,
+  onToggleLike,
+  onDismiss,
+}) {
   return (
     <Card>
       <div className="flex items-start justify-between gap-2">
@@ -36,9 +45,21 @@ export default function EventCard({ event, saved, onToggleSave, onAddCalendar })
         <button onClick={() => onAddCalendar(event)} className="chip chip-idle text-xs">
           Add to calendar
         </button>
-        <a href={event.url} target="_blank" rel="noreferrer" className="chip chip-idle text-xs">
+        <a
+          href={event.url}
+          target="_blank"
+          rel="noreferrer"
+          onClick={() => onViewSource?.(event)}
+          className="chip chip-idle text-xs"
+        >
           View source
         </a>
+        <button onClick={() => onToggleLike?.(event)} className={`chip text-xs ${liked ? "chip-active" : "chip-idle"}`}>
+          {liked ? "Liked" : "Like"}
+        </button>
+        <button onClick={() => onDismiss?.(event)} className="chip chip-idle text-xs">
+          Hide
+        </button>
       </div>
     </Card>
   );
