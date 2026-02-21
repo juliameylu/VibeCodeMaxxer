@@ -21,6 +21,30 @@ npm run dev
 
 The app will open at `http://localhost:5173`
 
+### Demo Mode (No API Keys Needed)
+
+1. Copy `.env.example` to `.env`
+2. Ensure `VITE_DEMO_MODE=true`
+3. Run the app normally (`npm run dev`)
+
+In demo mode, `/places` and `/events` use fixtures in `src/mocks/fixtures/`.
+For production, keep real Yelp/Cal Poly integrations server-side (proxy or edge function) and call those from `src/lib/api/places.js` and `src/lib/api/events.js`.
+
+### Live API Mode (Local Dev)
+
+The app now includes local API endpoints in `vite.config.js`:
+- `GET /api/places` (Yelp proxy)
+- `GET /api/events` (Cal Poly NOW scrape proxy)
+
+To use live data:
+1. Set `VITE_DEMO_MODE=false` in `.env`
+2. Add `YELP_API_KEY` to `.env` (server-side only)
+3. Restart `npm run dev`
+
+Notes:
+- Never put Yelp keys in client code or `VITE_` vars.
+- `/api/events` scrapes from `CALPOLY_EVENTS_SOURCE` (default uses `r.jina.ai` mirror of Cal Poly NOW).
+
 ### 3. Build for Production
 
 ```bash

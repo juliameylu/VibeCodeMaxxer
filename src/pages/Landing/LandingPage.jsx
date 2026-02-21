@@ -32,6 +32,15 @@ export default function LandingPage() {
           <Link to="/focus" className="chip chip-idle whitespace-nowrap">Focus Room</Link>
           <Link to="/discover" className="chip chip-idle whitespace-nowrap">Discover</Link>
         </div>
+
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <Link to="/places" className="chip chip-idle text-center text-xs">
+            Restaurants
+          </Link>
+          <Link to="/events" className="chip chip-idle text-center text-xs">
+            Cal Poly NOW
+          </Link>
+        </div>
       </header>
 
       <main className="mt-5 space-y-5 pb-8">

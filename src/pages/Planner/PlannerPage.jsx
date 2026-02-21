@@ -116,7 +116,9 @@ export default function PlannerPage() {
             <Calendar size={32} className="text-primary" />
             <div>
               <h1 className="text-3xl font-bold text-slate-900">My Tasks</h1>
-              <p className="text-slate-600">Manage your assignments and deadlines</p>
+              <p className="text-slate-600">
+                Manage your assignments and deadlines
+              </p>
             </div>
           </div>
 
@@ -124,7 +126,9 @@ export default function PlannerPage() {
           <div className="card-shadow p-5 mt-6">
             <div className="flex items-center justify-between mb-3">
               <p className="font-medium text-slate-900">Progress</p>
-              <p className="text-sm font-bold text-primary">{completionRate}%</p>
+              <p className="text-sm font-bold text-primary">
+                {completionRate}%
+              </p>
             </div>
             <div className="w-full bg-slate-200 rounded-full h-3">
               <div
@@ -160,7 +164,9 @@ export default function PlannerPage() {
           {tasks.length === 0 ? (
             <div className="text-center py-12">
               <p className="text-slate-600 text-lg">No tasks yet!</p>
-              <p className="text-slate-500 text-sm">Add one above to get started</p>
+              <p className="text-slate-500 text-sm">
+                Add one above to get started
+              </p>
             </div>
           ) : (
             tasks.map((task) => (
@@ -196,7 +202,9 @@ export default function PlannerPage() {
                         <span>{task.dueDate}</span>
                       </div>
                       <div className="w-1 h-1 bg-slate-300 rounded-full" />
-                      <span className="text-xs text-slate-600">{task.dueTime}</span>
+                      <span className="text-xs text-slate-600">
+                        {task.dueTime}
+                      </span>
                       <div className="w-1 h-1 bg-slate-300 rounded-full" />
                       <PriorityColor priority={task.priority} />
                     </div>
@@ -218,11 +226,15 @@ export default function PlannerPage() {
         {tasks.length > 0 && (
           <div className="grid grid-cols-3 gap-3">
             <div className="card-shadow p-4 text-center">
-              <p className="text-2xl font-bold text-yellow-600">{pendingCount}</p>
+              <p className="text-2xl font-bold text-yellow-600">
+                {pendingCount}
+              </p>
               <p className="text-xs text-slate-600 mt-1">Pending</p>
             </div>
             <div className="card-shadow p-4 text-center">
-              <p className="text-2xl font-bold text-green-600">{completedCount}</p>
+              <p className="text-2xl font-bold text-green-600">
+                {completedCount}
+              </p>
               <p className="text-xs text-slate-600 mt-1">Complete</p>
             </div>
             <div className="card-shadow p-4 text-center">
