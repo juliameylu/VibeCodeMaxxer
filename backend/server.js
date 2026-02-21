@@ -6,10 +6,14 @@ const app = express();
 const PORT = Number(process.env.BACKEND_PORT || 8787);
 const TARGET_URL = "https://www.fremontslo.com/shows/";
 const EVENTS_API_URL = new URL("/wp-json/tribe/events/v1/events?per_page=50", TARGET_URL).toString();
+const CACHE_TTL_MS = Number(process.env.SHOWS_CACHE_TTL_MS || 1000 * 60 * 30);
+const IMAGE_CACHE_TTL_MS = Number(process.env.IMAGE_CACHE_TTL_MS || 1000 * 60 * 60 * 24);
 
 app.use(cors({ origin: process.env.CORS_ORIGIN || "http://localhost:5173" }));
 
 let cache = null;
+let refreshInFlight = null;
+const eventImageCache = new Map();
 
 function normalizeText(value) {
   return (value || "").replace(/\s+/g, " ").trim();
@@ -280,6 +284,11 @@ async function fetchWithHeaders(url, accept) {
 async function fetchEventPageImage(link) {
   if (!link) return "";
 
+  const cached = eventImageCache.get(link);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.image;
+  }
+
   try {
     const res = await fetchWithHeaders(link, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
     if (!res.ok) return "";
@@ -294,7 +303,11 @@ async function fetchEventPageImage(link) {
       normalizeText($(".tribe-events-event-image img").first().attr("data-src")) ||
       normalizeText($("article img").first().attr("src"));
 
-    return absoluteUrl(ogImage || twitterImage || featuredImage);
+    const resolved = absoluteUrl(ogImage || twitterImage || featuredImage);
+    if (resolved) {
+      eventImageCache.set(link, { image: resolved, expiresAt: Date.now() + IMAGE_CACHE_TTL_MS });
+    }
+    return resolved;
   } catch {
     return "";
   }
@@ -437,6 +450,35 @@ async function scrapeShows() {
   };
 }
 
+function isCacheFresh(value) {
+  if (!value?.fetchedAt) return false;
+  const fetchedMs = new Date(value.fetchedAt).getTime();
+  if (Number.isNaN(fetchedMs)) return false;
+  return Date.now() - fetchedMs < CACHE_TTL_MS;
+}
+
+async function refreshCache(reason = "manual") {
+  if (refreshInFlight) return refreshInFlight;
+
+  refreshInFlight = (async () => {
+    const fresh = await scrapeShows();
+    cache = {
+      ...fresh,
+      cache: {
+        reason,
+        ttlMs: CACHE_TTL_MS,
+        stale: false
+      }
+    };
+    return cache;
+  })()
+    .finally(() => {
+      refreshInFlight = null;
+    });
+
+  return refreshInFlight;
+}
+
 app.get("/health", (_, res) => {
   res.json({ ok: true, service: "fremont-shows-backend" });
 });
@@ -445,12 +487,30 @@ app.get("/api/fremont-shows", async (req, res) => {
   const forceRefresh = req.query.refresh === "1";
 
   try {
-    const hadCacheBeforeRequest = Boolean(cache);
-    if (!cache || forceRefresh) {
-      cache = await scrapeShows();
+    if (forceRefresh) {
+      const fresh = await refreshCache("force");
+      return res.json({ ...fresh, cacheHit: false });
     }
 
-    res.json({ ...cache, cacheHit: !forceRefresh && hadCacheBeforeRequest });
+    if (!cache) {
+      const fresh = await refreshCache("cold-start");
+      return res.json({ ...fresh, cacheHit: false });
+    }
+
+    if (isCacheFresh(cache)) {
+      return res.json({ ...cache, cacheHit: true, cache: { ...cache.cache, stale: false } });
+    }
+
+    // Stale-while-revalidate: return stale data immediately and refresh in background.
+    if (!refreshInFlight) {
+      refreshCache("stale-revalidate").catch(() => {});
+    }
+
+    return res.json({
+      ...cache,
+      cacheHit: true,
+      cache: { ...cache.cache, stale: true, refreshing: Boolean(refreshInFlight) }
+    });
   } catch (error) {
     res.status(500).json({
       message: "Failed to scrape Fremont shows",

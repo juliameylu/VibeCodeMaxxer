@@ -31,6 +31,13 @@ body::before {
   background-size: 3px 3px;
 }
 
+#root {
+  width: 100%;
+  max-width: 440px;
+  min-height: 100vh;
+  margin: 0 auto;
+}
+
 @keyframes fadeIn {
   from {
     opacity: 0;

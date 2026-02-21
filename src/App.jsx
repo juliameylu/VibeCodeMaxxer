@@ -1,5 +1,8 @@
 import { BrowserRouter as Router, Navigate, Route, Routes } from "react-router-dom";
 import MainPage from "./pages/MainPage";
+import PlannerPage from "./pages/Planner/PlannerPage";
+import PlacesPage from "./pages/Places/PlacesPage";
+import EventsPage from "./pages/Events/EventsPage";
 import TasksPage from "./pages/TasksPage";
 import FocusPage from "./pages/FocusPage";
 import DiscoverPage from "./pages/DiscoverPage";
@@ -11,6 +14,9 @@ export default function App() {
     <Router>
       <Routes>
         <Route path="/" element={<MainPage />} />
+        <Route path="/planner" element={<PlannerPage />} />
+        <Route path="/places" element={<PlacesPage />} />
+        <Route path="/events" element={<EventsPage />} />
         <Route path="/tasks" element={<TasksPage />} />
         <Route path="/focus" element={<FocusPage />} />
         <Route path="/discover" element={<DiscoverPage />} />
