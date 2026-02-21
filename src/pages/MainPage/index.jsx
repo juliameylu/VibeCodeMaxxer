@@ -8,7 +8,7 @@ import AfterClassPlan from "./sections/AfterClassPlan";
 import DataSourcesFooter from "./sections/DataSourcesFooter";
 import MobileShell from "../../components/MobileShell";
 
-export default function LandingPage() {
+export default function MainPage() {
   return (
     <MobileShell>
       <header className="glass-card p-4">
@@ -22,9 +22,9 @@ export default function LandingPage() {
               <p className="text-lg font-bold text-ink">Hello Faith</p>
             </div>
           </Link>
-          <button className="rounded-2xl border border-black/5 bg-white/60 p-2 text-ink/75">
+          <Link to="/profile" className="rounded-2xl border border-black/5 bg-white/60 p-2 text-ink/75">
             <Menu size={20} />
-          </button>
+          </Link>
         </div>
 
         <div className="mt-4 flex gap-2 overflow-x-auto pb-1">

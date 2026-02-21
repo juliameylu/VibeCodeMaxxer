@@ -4,11 +4,16 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "sh -c 'node backend/server.js & BACK_PID=$!; trap \"kill $BACK_PID\" EXIT; vite'",
+    "dev:frontend": "vite",
+    "backend": "node backend/server.js",
     "build": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {
+    "cheerio": "^1.0.0",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.20.0",
