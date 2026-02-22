@@ -7,14 +7,46 @@ const CHIPS = ["Best hikes?", "Cheap eats", "Plan a beach trip", "What can you d
 
 const NAV_ITEMS = [
   { to: "/home", label: "Home", icon: Home },
+  { to: "/ai", label: "Jarvis", icon: Bot, active: true },
   { to: "/explore", label: "Explore", icon: Compass },
   { to: "/jam/DEMO42", label: "Jams", icon: Circle },
-  { to: "/ai", label: "Jarvis", icon: Bot, active: true },
   { to: "/profile", label: "Profile", icon: UserRound }
 ];
 
+function parseJson(raw, fallback) {
+  if (!raw) return fallback;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
+}
+
+function buildAgentContext() {
+  const tasks = parseJson(localStorage.getItem("polyjarvis_tasks"), []);
+  const prefs = parseJson(localStorage.getItem("polyjarvis_prefs"), {});
+  const plans = parseJson(localStorage.getItem("polyjarvis_plans"), []);
+  const pendingTasks = tasks.filter((task) => !task.done).length;
+  const priorityTasks = tasks.filter((task) => task.priority && !task.done).length;
+
+  return {
+    activeScreen: "ai",
+    weather: "clear",
+    timeOfDay: "evening",
+    study_load_score: priorityTasks * 3 + pendingTasks * 2,
+    preferences: {
+      categories: Array.isArray(prefs.categories) ? prefs.categories : [],
+      vibe: prefs.vibe || "chill",
+      budget: prefs.budget || "medium",
+      transport: prefs.transport || "walk"
+    },
+    upcoming_plans: Array.isArray(plans) ? plans.slice(0, 5) : []
+  };
+}
+
 export default function AIPage() {
   const [message, setMessage] = useState("");
+  const [chatId, setChatId] = useState("");
   const [assistantText, setAssistantText] = useState("");
   const [cards, setCards] = useState([]);
   const [actions, setActions] = useState([]);
@@ -39,10 +71,11 @@ export default function AIPage() {
         method: "POST",
         body: {
           message,
-          context: { activeScreen: "ai", weather: "clear", timeOfDay: "evening" },
+          context: buildAgentContext(),
           chips: CHIPS
         }
       });
+      setChatId(data.chat_id || "");
       setAssistantText(data.assistant_text || "");
       setCards(data.cards || []);
       setActions(data.proposed_actions || []);
@@ -56,7 +89,10 @@ export default function AIPage() {
 
   const confirmAction = async (actionId) => {
     try {
-      const data = await apiFetch(`/api/agent/actions/${actionId}/confirm`, { method: "POST", body: {} });
+      const data = await apiFetch(`/api/agent/actions/${actionId}/confirm`, {
+        method: "POST",
+        body: { chat_id: chatId || undefined }
+      });
       setStatus(`Confirmed ${data.action_type}`);
       setActions((prev) => prev.filter((item) => item.action_id !== actionId));
     } catch (requestError) {
@@ -64,103 +100,143 @@ export default function AIPage() {
     }
   };
 
+  const submitFeedback = async (signal) => {
+    if (!chatId) {
+      setStatus("No chat id yet. Send a message first.");
+      return;
+    }
+
+    try {
+      await apiFetch("/api/agent/feedback", {
+        method: "POST",
+        body: {
+          chat_id: chatId,
+          signal,
+          card_ids: cards.map((card) => card.id).filter(Boolean)
+        }
+      });
+      setStatus(signal === "helpful" ? "Feedback saved: Helpful" : "Feedback saved: Not a fit");
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Could not save feedback.");
+    }
+  };
+
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[#001f03] text-[#c7ff9a]">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_8%_0%,rgba(121,255,80,0.25),transparent_36%),radial-gradient(circle_at_30%_8%,rgba(70,135,43,0.18),transparent_22%)]" />
+    <div className="min-h-screen bg-[#eef5ee] px-0 sm:px-4 sm:py-2">
+      <div className="relative mx-auto flex min-h-screen w-full max-w-[540px] flex-col overflow-hidden rounded-none bg-[#001f03] text-[#d9f0d2] sm:min-h-[96vh] sm:rounded-[36px]">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_16%_4%,rgba(130,255,77,0.22),transparent_36%),linear-gradient(180deg,#022606_0%,#001d03_55%,#001a03_100%)]" />
 
-      <div className="relative mx-auto flex min-h-screen w-full max-w-[1100px] flex-col px-3 pb-[220px] pt-4 sm:px-4 sm:pb-44 sm:pt-6">
-        <header className="flex items-center gap-3 sm:gap-4">
-          <div className="flex h-12 w-12 items-center justify-center rounded-full border border-[#7ef85333] bg-[#79ff5014] shadow-[0_0_28px_rgba(124,255,69,0.24)] sm:h-16 sm:w-16">
-            <span className="text-xl font-black text-[#91f75f] sm:text-2xl">J</span>
-          </div>
-          <div>
-            <h1 className="text-[clamp(1.5rem,6vw,2.6rem)] font-extrabold leading-none text-[#f2ffe5]">Jarvis <span className="text-[#94ff67]">✧</span></h1>
-            <p className="mt-1 text-[clamp(0.78rem,2.4vw,1.1rem)] text-[#9bd47f]">● SLO Expert · Always online</p>
-          </div>
-        </header>
+        <div className="relative flex-1 px-3 pb-[186px] pt-6 sm:px-4">
+          <p className="text-center text-[11px] font-extrabold tracking-[0.35em] text-[#768d76]">POLYJARVIS</p>
 
-        <main className="mt-4 flex-1 space-y-3 overflow-y-auto pr-1 sm:mt-6 sm:space-y-4">
-          <article className="max-w-4xl rounded-[22px] border border-[#95ff6d29] bg-[#9dff8930] px-4 py-4 text-[clamp(0.95rem,3.3vw,2rem)] font-semibold leading-tight text-[#ecffe2] shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] sm:rounded-[26px] sm:px-6 sm:py-5">
-            {greetingText}
-          </article>
+          <header className="mt-5 flex items-center gap-3">
+            <div className="flex h-14 w-14 items-center justify-center rounded-full border border-[#7ef8533d] bg-[#98ff6e14] shadow-[0_0_26px_rgba(137,255,95,0.20)]">
+              <span className="text-2xl font-black text-[#98ea68]">J</span>
+            </div>
+            <div>
+              <h1 className="text-[26px] font-extrabold leading-none text-[#f2ffe6]">Jarvis <span className="text-[#95ff67]">✧</span></h1>
+              <p className="mt-0.5 text-[13px] text-[#8eb087]">● SLO Expert · Always online</p>
+            </div>
+          </header>
 
-          {assistantText ? (
-            <article className="max-w-4xl rounded-[22px] border border-[#95ff6d40] bg-[#d4ffc61a] px-4 py-4 text-[clamp(0.82rem,2.4vw,1.25rem)] font-medium text-[#e4ffd0] sm:rounded-[26px] sm:px-6 sm:py-5">
-              {assistantText}
+          <main className="mt-6 space-y-3">
+            <article className="rounded-[22px] border border-[#95ff6d2b] bg-[#8bff7f26] px-5 py-4 text-[12px] font-semibold leading-relaxed text-[#edfbe8]">
+              {greetingText}
             </article>
-          ) : null}
 
-          {cards.map((card) => (
-            <article key={card.id} className="max-w-4xl rounded-[20px] border border-[#a6ff7b36] bg-[#092b0d] px-4 py-3 sm:rounded-[24px] sm:px-5 sm:py-4">
-              <h2 className="text-[clamp(0.96rem,2.6vw,1.5rem)] font-bold text-[#efffe8]">{card.title}</h2>
-              <p className="mt-1 text-[clamp(0.75rem,2.2vw,1rem)] text-[#b9dea6]">{card.subtitle}</p>
-              <Link to={card.deep_link} className="mt-3 inline-block rounded-full border border-[#93f56866] px-3 py-1.5 text-xs font-semibold text-[#9cff6f] sm:px-4 sm:py-2 sm:text-sm">
-                Open card
-              </Link>
-            </article>
-          ))}
+            {assistantText ? (
+              <div className="space-y-2">
+                <article className="rounded-[22px] border border-[#95ff6d3d] bg-[#d4ffc61a] px-5 py-4 text-[11px] font-medium text-[#e5ffda]">
+                  {assistantText}
+                </article>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => submitFeedback("helpful")}
+                    className="rounded-full border border-[#a9ff803d] bg-[#8ff45129] px-3 py-1 text-[10px] font-bold text-[#a8f774]"
+                  >
+                    Helpful
+                  </button>
+                  <button
+                    onClick={() => submitFeedback("not_fit")}
+                    className="rounded-full border border-white/20 bg-white/10 px-3 py-1 text-[10px] font-bold text-white/70"
+                  >
+                    Not a fit
+                  </button>
+                </div>
+              </div>
+            ) : null}
 
-          {actions.map((action) => (
-            <article key={action.action_id} className="max-w-4xl rounded-[20px] border border-[#a6ff7b36] bg-[#0e320f] px-4 py-3 sm:rounded-[24px] sm:px-5 sm:py-4">
-              <p className="text-sm font-semibold text-[#ebffdd] sm:text-lg">Proposed action: {action.type}</p>
-              <p className="mt-1 text-xs text-[#acd39a] sm:text-sm">Requires confirmation before write.</p>
-              <button
-                onClick={() => confirmAction(action.action_id)}
-                className="mt-3 rounded-full bg-[#8ff451] px-3 py-1.5 text-xs font-bold text-[#12310f] sm:px-4 sm:py-2 sm:text-sm"
-              >
-                Confirm action
-              </button>
-            </article>
-          ))}
+            {cards.map((card) => (
+              <article key={card.id} className="rounded-[20px] border border-[#a6ff7b36] bg-[#0e320f] px-4 py-3">
+                <h2 className="text-[15px] font-bold text-[#efffe8]">{card.title}</h2>
+                <p className="mt-1 text-xs text-[#b9dea6]">{card.subtitle}</p>
+                <Link to={card.deep_link} className="mt-2 inline-block rounded-full border border-[#93f56866] px-3 py-1.5 text-xs font-semibold text-[#9cff6f]">
+                  Open card
+                </Link>
+              </article>
+            ))}
 
-          {status ? <p className="text-sm font-semibold text-[#b3f98a]">{status}</p> : null}
-          {error ? <p className="text-sm font-semibold text-[#ff9f9f]">{error}</p> : null}
-        </main>
-      </div>
+            {actions.map((action) => (
+              <article key={action.action_id} className="rounded-[20px] border border-[#a6ff7b36] bg-[#0e320f] px-4 py-3">
+                <p className="text-sm font-semibold text-[#ebffdd]">Proposed action: {action.type}</p>
+                <button
+                  onClick={() => confirmAction(action.action_id)}
+                  className="mt-2 rounded-full bg-[#8ff451] px-3 py-1.5 text-xs font-bold text-[#12310f]"
+                >
+                  Confirm action
+                </button>
+              </article>
+            ))}
 
-      <div className="pointer-events-none fixed inset-x-0 bottom-[126px] z-20 mx-auto flex max-w-[1100px] gap-2 overflow-x-auto px-3 pb-2 sm:bottom-[152px] sm:px-4">
-        {CHIPS.map((chip) => (
-          <button
-            key={chip}
-            onClick={() => setMessage(chip)}
-            className="pointer-events-auto shrink-0 rounded-full border border-[#85f65f4d] bg-[#79ff5021] px-4 py-2 text-[clamp(0.72rem,1.8vw,1rem)] font-semibold text-[#9bff6d] sm:px-5 sm:py-2.5"
-          >
-            {chip}
-          </button>
-        ))}
-      </div>
-
-      <form onSubmit={send} className="fixed inset-x-0 bottom-[72px] z-20 bg-[#86fd6a14] px-3 py-2 backdrop-blur-sm sm:bottom-[78px] sm:px-4 sm:py-3">
-        <div className="mx-auto flex w-full max-w-[1100px] items-center gap-2 sm:gap-3">
-          <input
-            value={message}
-            onChange={(event) => setMessage(event.target.value)}
-            placeholder="Ask Jarvis anything..."
-            className="h-12 w-full rounded-full border border-[#87f95e40] bg-[#a8ff861f] px-4 text-[clamp(0.82rem,2.1vw,1.05rem)] font-semibold text-[#e7ffd8] placeholder:text-[#9dbc8f] focus:outline-none sm:h-16 sm:px-6 sm:text-[clamp(1rem,2.3vw,1.45rem)]"
-          />
-          <button
-            type="submit"
-            disabled={sending}
-            className="inline-flex h-12 w-12 items-center justify-center rounded-full bg-[#90f755] text-[#193a13] disabled:opacity-60 sm:h-16 sm:w-16"
-            aria-label="Send"
-          >
-            <Send size={18} className="sm:h-6 sm:w-6" />
-          </button>
+            {status ? <p className="text-xs font-semibold text-[#b3f98a]">{status}</p> : null}
+            {error ? <p className="text-xs font-semibold text-[#ff9f9f]">{error}</p> : null}
+          </main>
         </div>
-      </form>
 
-      <nav className="fixed inset-x-0 bottom-0 border-t border-black/5 bg-[#f2f3f3] px-2 py-2 sm:px-4 sm:py-3">
-        <ul className="mx-auto grid w-full max-w-[1100px] grid-cols-5 gap-1">
-          {NAV_ITEMS.map(({ to, label, icon: Icon, active }) => (
-            <li key={to}>
-              <Link to={to} className="flex flex-col items-center gap-1 rounded-2xl py-1 text-[10px] font-semibold sm:text-xs">
-                <Icon size={18} className={active ? "text-[#5e8f3e]" : "text-[#b8bec1]"} />
-                <span className={active ? "text-[#4f7c34]" : "text-[#bcc4c7]"}>{label}</span>
-              </Link>
-            </li>
-          ))}
-        </ul>
-      </nav>
+        <div className="relative border-t border-[#82f16429] bg-[#9eff7f14] px-2.5 py-2">
+          <div className="mb-2 flex gap-2 overflow-x-auto pb-1">
+            {CHIPS.map((chip) => (
+              <button
+                key={chip}
+                onClick={() => setMessage(chip)}
+                className="shrink-0 rounded-full border border-[#85f65f4d] bg-[#79ff501f] px-4 py-2 text-[11px] font-semibold text-[#90e563]"
+              >
+                {chip}
+              </button>
+            ))}
+          </div>
+
+          <form onSubmit={send} className="flex items-center gap-2">
+            <input
+              value={message}
+              onChange={(event) => setMessage(event.target.value)}
+              placeholder="Ask Jarvis anything..."
+              className="h-14 w-full rounded-full border border-[#87f95e45] bg-[#a8ff861a] px-5 text-[11px] font-semibold text-[#e7ffd8] placeholder:text-[#99b697] focus:outline-none"
+            />
+            <button
+              type="submit"
+              disabled={sending}
+              className="inline-flex h-14 w-14 items-center justify-center rounded-full bg-[#92f65a] text-[#173114] disabled:opacity-60"
+              aria-label="Send"
+            >
+              <Send size={20} />
+            </button>
+          </form>
+        </div>
+
+        <nav className="border-t border-[#83f16622] bg-[#051f08] px-1 py-2">
+          <ul className="grid grid-cols-5 gap-1">
+            {NAV_ITEMS.map(({ to, label, icon: Icon, active }) => (
+              <li key={to}>
+                <Link to={to} className="flex flex-col items-center gap-1 rounded-2xl py-1 text-[10px] font-bold uppercase tracking-wide">
+                  <Icon size={20} className={active ? "text-[#89ea5e]" : "text-[#637b65]"} />
+                  <span className={active ? "text-[#89ea5e]" : "text-[#637b65]"}>{label}</span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </nav>
+      </div>
     </div>
   );
 }

@@ -1,31 +1,59 @@
-import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import * as cheerio from "cheerio";
+import fs from "fs/promises";
 import { registerPlannerApi } from "./plannerApi.js";
 
 const app = express();
 const PORT = Number(process.env.BACKEND_PORT || 8787);
 const TARGET_URL = "https://www.fremontslo.com/shows/";
 const EVENTS_API_URL = new URL("/wp-json/tribe/events/v1/events?per_page=50", TARGET_URL).toString();
-const CACHE_TTL_MS = Number(process.env.SHOWS_CACHE_TTL_MS || 1000 * 60 * 30);
-const IMAGE_CACHE_TTL_MS = Number(process.env.IMAGE_CACHE_TTL_MS || 1000 * 60 * 60 * 24);
+const DEFAULT_SLOCAL_OUTDOOR_URL = "https://www.slocal.com/things-to-do/outdoor-activities/";
+const DEFAULT_TRAILS_CSV_PATH = "/Users/kalanisterling/Downloads/Proposed_Trails.csv";
+const DEFAULT_WIKIPEDIA_CATEGORY_URL =
+  "https://en.wikipedia.org/wiki/Category:Tourist_attractions_in_San_Luis_Obispo_County,_California";
 
-app.use(cors({ origin: process.env.CORS_ORIGIN || "http://localhost:5173" }));
-app.use(express.json());
+const allowedOrigins = (process.env.CORS_ORIGIN || "http://localhost:5173,http://localhost:5174")
+  .split(",")
+  .map((item) => item.trim())
+  .filter(Boolean);
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin) {
+        callback(null, true);
+        return;
+      }
+      callback(null, allowedOrigins.includes(origin));
+    }
+  })
+);
+app.use(express.json({ limit: "1mb" }));
 
 let cache = null;
-let refreshInFlight = null;
-const eventImageCache = new Map();
 
 function normalizeText(value) {
   return (value || "").replace(/\s+/g, " ").trim();
+}
+
+function toId(value) {
+  return normalizeText(value).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 }
 
 function absoluteUrl(value) {
   if (!value) return "";
   try {
     return new URL(value, TARGET_URL).toString();
+  } catch {
+    return value;
+  }
+}
+
+function absoluteUrlFrom(base, value) {
+  if (!value) return "";
+  try {
+    return new URL(value, base).toString();
   } catch {
     return value;
   }
@@ -287,11 +315,6 @@ async function fetchWithHeaders(url, accept) {
 async function fetchEventPageImage(link) {
   if (!link) return "";
 
-  const cached = eventImageCache.get(link);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.image;
-  }
-
   try {
     const res = await fetchWithHeaders(link, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
     if (!res.ok) return "";
@@ -306,11 +329,7 @@ async function fetchEventPageImage(link) {
       normalizeText($(".tribe-events-event-image img").first().attr("data-src")) ||
       normalizeText($("article img").first().attr("src"));
 
-    const resolved = absoluteUrl(ogImage || twitterImage || featuredImage);
-    if (resolved) {
-      eventImageCache.set(link, { image: resolved, expiresAt: Date.now() + IMAGE_CACHE_TTL_MS });
-    }
-    return resolved;
+    return absoluteUrl(ogImage || twitterImage || featuredImage);
   } catch {
     return "";
   }
@@ -453,110 +472,270 @@ async function scrapeShows() {
   };
 }
 
-function isCacheFresh(value) {
-  if (!value?.fetchedAt) return false;
-  const fetchedMs = new Date(value.fetchedAt).getTime();
-  if (Number.isNaN(fetchedMs)) return false;
-  return Date.now() - fetchedMs < CACHE_TTL_MS;
+function parseSimpleCsvLine(line) {
+  const cells = [];
+  let current = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const char = line[i];
+    if (char === '"') {
+      const next = line[i + 1];
+      if (inQuotes && next === '"') {
+        current += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if (char === "," && !inQuotes) {
+      cells.push(current);
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  cells.push(current);
+  return cells.map((cell) => normalizeText(cell));
 }
 
-async function refreshCache(reason = "manual") {
-  if (refreshInFlight) return refreshInFlight;
+async function importTrailsFromCsv(csvPath = DEFAULT_TRAILS_CSV_PATH) {
+  const raw = await fs.readFile(csvPath, "utf8");
+  const lines = raw.replace(/^\uFEFF/, "").split(/\r?\n/).filter((line) => line.trim().length > 0);
+  if (lines.length < 2) return [];
 
-  refreshInFlight = (async () => {
-    const fresh = await scrapeShows();
-    cache = {
-      ...fresh,
-      cache: {
-        reason,
-        ttlMs: CACHE_TTL_MS,
-        stale: false
+  const header = parseSimpleCsvLine(lines[0]);
+  const idxPlanningArea = header.findIndex((h) => h.toLowerCase() === "planning_area");
+  const idxTrailName = header.findIndex((h) => h.toLowerCase() === "trail_name");
+  const idxTrailRoute = header.findIndex((h) => h.toLowerCase() === "trail_route");
+  const idxLength = header.findIndex((h) => h.toLowerCase() === "shapestlength");
+
+  const dedup = new Map();
+
+  for (let i = 1; i < lines.length; i += 1) {
+    const row = parseSimpleCsvLine(lines[i]);
+    const planningArea = normalizeText(idxPlanningArea >= 0 ? row[idxPlanningArea] : "");
+    const trailName = normalizeText(idxTrailName >= 0 ? row[idxTrailName] : "");
+    const trailRoute = normalizeText(idxTrailRoute >= 0 ? row[idxTrailRoute] : "");
+    const shapeLength = normalizeText(idxLength >= 0 ? row[idxLength] : "");
+    const bestName = trailName || trailRoute;
+    if (!bestName || bestName.length < 2) continue;
+
+    const key = `${bestName.toLowerCase()}|${planningArea.toLowerCase()}`;
+    const miles = Number(shapeLength) ? Number(shapeLength) / 1609.34 : null;
+
+    const existing = dedup.get(key);
+    if (!existing) {
+      dedup.set(key, {
+        id: `trail-${toId(bestName)}-${toId(planningArea || "countywide")}`,
+        title: bestName,
+        category: "Hikes",
+        subcategory: "Proposed Trail",
+        city: "San Luis Obispo County",
+        location: planningArea || "Countywide",
+        distance: miles ? `${miles.toFixed(1)} miles` : "Varies",
+        price: "Free",
+        rating: 4.2,
+        features: ["outdoor", "proposed", "group friendly"],
+        tags: ["trail", "proposed", "slo county"],
+        website: "",
+        source: "Proposed_Trails.csv",
+      });
+    } else if (miles) {
+      const currentMiles = Number(existing.distance.split(" ")[0]);
+      if (Number.isFinite(currentMiles) && miles > currentMiles) {
+        existing.distance = `${miles.toFixed(1)} miles`;
       }
-    };
-    return cache;
-  })()
-    .finally(() => {
-      refreshInFlight = null;
-    });
+    }
+  }
 
-  return refreshInFlight;
+  return Array.from(dedup.values()).sort((a, b) => a.title.localeCompare(b.title)).slice(0, 250);
+}
+
+function scrapeSlocalOutdoorActivities(html, baseUrl = DEFAULT_SLOCAL_OUTDOOR_URL) {
+  const $ = cheerio.load(html);
+  const seen = new Set();
+  const results = [];
+
+  const candidateSelectors = [
+    "main a[href]",
+    ".entry-content a[href]",
+    ".content a[href]",
+    "article a[href]",
+    "a[href*='/things-to-do/']"
+  ];
+
+  candidateSelectors.forEach((selector) => {
+    $(selector).each((_, node) => {
+      const $node = $(node);
+      const title = normalizeText($node.text());
+      const href = normalizeText($node.attr("href"));
+
+      if (!title || title.length < 3) return;
+      if (!href || href.startsWith("#")) return;
+      if (/read more|learn more|view all|click here|next|prev/i.test(title)) return;
+
+      const key = title.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+
+      results.push({
+        id: `slocal-${toId(title)}`,
+        title,
+        category: "Outdoors",
+        subcategory: "SLOCAL Outdoor Activities",
+        city: "San Luis Obispo",
+        location: "San Luis Obispo County",
+        distance: "Varies",
+        price: "Free",
+        rating: 4.3,
+        features: ["outdoor", "group friendly"],
+        tags: ["slocal", "outdoor", "local guide"],
+        website: absoluteUrlFrom(baseUrl, href || baseUrl),
+        source: baseUrl
+      });
+    });
+  });
+
+  return results.slice(0, 120);
+}
+
+function scrapeWikipediaCategoryAttractions(html, baseUrl = DEFAULT_WIKIPEDIA_CATEGORY_URL) {
+  const $ = cheerio.load(html);
+  const seen = new Set();
+  const spots = [];
+
+  const selectors = [
+    "#mw-pages .mw-category-group li a",
+    "#mw-pages li a",
+    ".mw-category li a"
+  ];
+
+  selectors.forEach((selector) => {
+    $(selector).each((_, node) => {
+      const $node = $(node);
+      const title = normalizeText($node.text());
+      const href = normalizeText($node.attr("href"));
+      if (!title || title.length < 2) return;
+      if (!href || !href.startsWith("/wiki/")) return;
+      if (title.toLowerCase().startsWith("category:")) return;
+
+      const key = title.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+
+      spots.push({
+        id: `wikipedia-${toId(title)}`,
+        title,
+        category: "Outdoors",
+        subcategory: "Wikipedia Tourist Attraction",
+        city: "San Luis Obispo County",
+        location: "San Luis Obispo County",
+        distance: "Varies",
+        price: "Free",
+        rating: 4.2,
+        features: ["outdoor", "group friendly", "walkable"],
+        tags: ["wikipedia", "tourist attraction", "slo county"],
+        website: absoluteUrlFrom(baseUrl, href),
+        source: baseUrl
+      });
+    });
+  });
+
+  return spots.slice(0, 250);
 }
 
 app.get("/health", (_, res) => {
   res.json({ ok: true, service: "fremont-shows-backend" });
 });
 
-app.get("/api/figma/test", async (_, res) => {
-  const apiKey = process.env.FIGMA_API_KEY;
-  const fileKey = process.env.FIGMA_FILE_KEY;
-
-  if (!apiKey || !fileKey) {
-    res.status(500).json({ error: "Missing FIGMA_API_KEY or FIGMA_FILE_KEY in backend environment." });
-    return;
-  }
-
-  try {
-    const response = await fetch(`https://api.figma.com/v1/files/${fileKey}`, {
-      headers: { "X-Figma-Token": apiKey }
-    });
-    const data = await response.json();
-
-    if (!response.ok) {
-      res.status(response.status).json({
-        error: "Figma API request failed",
-        details: data
-      });
-      return;
-    }
-
-    res.json({
-      ok: true,
-      name: data?.name || "",
-      lastModified: data?.lastModified || "",
-      version: data?.version || "",
-      role: data?.role || ""
-    });
-  } catch (error) {
-    res.status(500).json({
-      error: "Figma request error",
-      details: error instanceof Error ? error.message : "Unknown error"
-    });
-  }
-});
-
 app.get("/api/fremont-shows", async (req, res) => {
   const forceRefresh = req.query.refresh === "1";
 
   try {
-    if (forceRefresh) {
-      const fresh = await refreshCache("force");
-      return res.json({ ...fresh, cacheHit: false });
+    const hadCacheBeforeRequest = Boolean(cache);
+    if (!cache || forceRefresh) {
+      cache = await scrapeShows();
     }
 
-    if (!cache) {
-      const fresh = await refreshCache("cold-start");
-      return res.json({ ...fresh, cacheHit: false });
-    }
-
-    if (isCacheFresh(cache)) {
-      return res.json({ ...cache, cacheHit: true, cache: { ...cache.cache, stale: false } });
-    }
-
-    // Stale-while-revalidate: return stale data immediately and refresh in background.
-    if (!refreshInFlight) {
-      refreshCache("stale-revalidate").catch(() => {});
-    }
-
-    return res.json({
-      ...cache,
-      cacheHit: true,
-      cache: { ...cache.cache, stale: true, refreshing: Boolean(refreshInFlight) }
-    });
+    res.json({ ...cache, cacheHit: !forceRefresh && hadCacheBeforeRequest });
   } catch (error) {
     res.status(500).json({
       message: "Failed to scrape Fremont shows",
       error: error instanceof Error ? error.message : "Unknown error",
       ...(cache ? { staleCache: cache } : {})
+    });
+  }
+});
+
+app.get("/api/import/slocal-outdoor", async (req, res) => {
+  const url = normalizeText(req.query.url) || DEFAULT_SLOCAL_OUTDOOR_URL;
+  try {
+    const response = await fetchWithHeaders(url, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+    if (!response.ok) {
+      res.status(502).json({ error: "Failed to fetch source URL", status: response.status, url });
+      return;
+    }
+    const html = await response.text();
+    const spots = scrapeSlocalOutdoorActivities(html, url);
+    res.json({
+      ok: true,
+      source: url,
+      count: spots.length,
+      spots
+    });
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: "Failed to import from SLOCAL outdoor page",
+      details: error instanceof Error ? error.message : "Unknown error",
+      source: url
+    });
+  }
+});
+
+app.get("/api/import/wikipedia-category", async (req, res) => {
+  const url = normalizeText(req.query.url) || DEFAULT_WIKIPEDIA_CATEGORY_URL;
+  try {
+    const response = await fetchWithHeaders(url, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+    if (!response.ok) {
+      res.status(502).json({ error: "Failed to fetch Wikipedia category page", status: response.status, source: url });
+      return;
+    }
+    const html = await response.text();
+    const spots = scrapeWikipediaCategoryAttractions(html, url);
+    res.json({
+      ok: true,
+      source: url,
+      count: spots.length,
+      spots
+    });
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: "Failed to import Wikipedia category attractions",
+      details: error instanceof Error ? error.message : "Unknown error",
+      source: url
+    });
+  }
+});
+
+app.post("/api/import/proposed-trails-csv", async (req, res) => {
+  const csvPath = normalizeText(req.body?.csv_path) || DEFAULT_TRAILS_CSV_PATH;
+  try {
+    const spots = await importTrailsFromCsv(csvPath);
+    res.json({
+      ok: true,
+      source: csvPath,
+      count: spots.length,
+      spots
+    });
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: "Failed to parse proposed trails CSV",
+      details: error instanceof Error ? error.message : "Unknown error",
+      source: csvPath
     });
   }
 });
