@@ -30,6 +30,8 @@ const TWILIO_PUBLIC_BASE_URL = process.env.TWILIO_PUBLIC_BASE_URL || process.env
 const JARVIS_CALL_TONE = process.env.JARVIS_CALL_TONE || "casual";
 const DEMO_GUEST_PHONE_NUMBER = process.env.DEMO_GUEST_PHONE_NUMBER || "";
 const DEMO_USER_PHONE_MAP_JSON = process.env.DEMO_USER_PHONE_MAP_JSON || "{}";
+const SUPABASE_URL = process.env.SUPABASE_URL || "";
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 const RESERVATION_CALL_MAX_SECONDS = 120;
 const RESERVATION_CALL_MAX_RETRIES = 1;
 const SMS_NOTIFICATIONS_ENABLED = false;
@@ -44,6 +46,7 @@ let snapshotWriteInFlight = null;
 let twilioClient = null;
 
 const NOW = () => new Date();
+const OPENAI_MODEL_FALLBACKS = ["gpt-4.1-mini", "gpt-4o-mini"];
 
 const store = {
   users: new Map(),
@@ -146,6 +149,371 @@ function markStoreDirty() {
   storeDirty = true;
 }
 
+function canUseSupabaseRest() {
+  return Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY);
+}
+
+async function supabaseRest(path, { method = "GET", body, prefer } = {}) {
+  if (!canUseSupabaseRest()) return { ok: false, status: 0, data: null };
+  const headers = {
+    apikey: SUPABASE_SERVICE_ROLE_KEY,
+    Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+    "Content-Type": "application/json"
+  };
+  if (prefer) headers.Prefer = prefer;
+
+  try {
+    const response = await fetch(`${SUPABASE_URL}/rest/v1${path}`, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined
+    });
+
+    const contentType = response.headers.get("content-type") || "";
+    const data = contentType.includes("application/json")
+      ? await response.json().catch(() => null)
+      : await response.text().catch(() => null);
+
+    if (!response.ok) {
+      console.error("Supabase REST error", path, response.status, data);
+    }
+
+    return { ok: response.ok, status: response.status, data };
+  } catch (error) {
+    console.error("Supabase REST request failed", path, error?.message || error);
+    return { ok: false, status: 0, data: null };
+  }
+}
+
+async function ensureSupabaseProfile(user) {
+  if (!user || !canUseSupabaseRest()) return;
+  const supabaseUserId = getSupabaseUserId(user);
+  await supabaseRest("/profiles", {
+    method: "POST",
+    prefer: "resolution=merge-duplicates,return=minimal",
+    body: {
+      id: supabaseUserId,
+      email: user.email,
+      display_name: user.display_name || user.email?.split("@")?.[0] || "User",
+      phone: user.phone || null,
+      onboarding_complete: Boolean(user.onboarding_complete),
+      updated_at: NOW().toISOString()
+    }
+  });
+}
+
+async function persistUserStateToSupabase(userId) {
+  if (!userId || !canUseSupabaseRest()) return;
+  const user = store.users.get(userId);
+  if (!user) return;
+  const supabaseUserId = getSupabaseUserId(user);
+
+  await ensureSupabaseProfile(user);
+
+  const preferences = getOrInitPreferences(userId);
+  await supabaseRest("/preferences", {
+    method: "POST",
+    prefer: "resolution=merge-duplicates,return=minimal",
+    body: {
+      user_id: supabaseUserId,
+      categories: Array.isArray(preferences.categories) ? preferences.categories : [],
+      vibe: preferences.vibe || null,
+      budget: preferences.budget || null,
+      transport: preferences.transport || null,
+      updated_at: preferences.updated_at || NOW().toISOString()
+    }
+  });
+
+  const connections = getOrInitConnections(userId);
+  await supabaseRest("/connections", {
+    method: "POST",
+    prefer: "resolution=merge-duplicates,return=minimal",
+    body: {
+      user_id: supabaseUserId,
+      calendar_google_connected: Boolean(connections.calendar_google_connected),
+      calendar_ics_connected: Boolean(connections.calendar_ics_connected),
+      canvas_connected: Boolean(connections.canvas_connected),
+      canvas_mode: connections.canvas_mode || null,
+      last_calendar_sync_at: connections.last_calendar_sync_at || null,
+      updated_at: connections.updated_at || NOW().toISOString()
+    }
+  });
+}
+
+async function persistPlanToSupabase(plan) {
+  if (!plan || !canUseSupabaseRest()) return;
+  const owner = store.users.get(plan.host_user_id);
+  if (!owner) return;
+  await ensureSupabaseProfile(owner);
+  const supabaseOwnerId = getSupabaseUserId(owner);
+
+  await supabaseRest("/plans", {
+    method: "POST",
+    prefer: "resolution=merge-duplicates,return=minimal",
+    body: {
+      id: plan.id,
+      host_user_id: supabaseOwnerId,
+      title: plan.title,
+      constraints_json: plan.constraints_json || {},
+      status: plan.status || "draft",
+      finalized_option_json: plan.finalized_option_json || null,
+      created_at: plan.created_at || NOW().toISOString()
+    }
+  });
+
+  const options = Array.isArray(plan.options) ? plan.options : [];
+  if (options.length === 0) return;
+
+  await supabaseRest(`/plan_options?plan_id=eq.${encodeURIComponent(plan.id)}`, {
+    method: "DELETE"
+  });
+
+  await supabaseRest("/plan_options", {
+    method: "POST",
+    prefer: "resolution=merge-duplicates,return=minimal",
+    body: options.map((option, index) => ({
+      id: option.id || randomUUID(),
+      plan_id: plan.id,
+      option_json: option,
+      score: Number(option?.score ?? 0),
+      rank: index + 1
+    }))
+  });
+}
+
+async function persistJamToSupabase(jam) {
+  if (!jam || !canUseSupabaseRest()) return;
+  const owner = store.users.get(jam.host_user_id);
+  if (!owner) return;
+  await ensureSupabaseProfile(owner);
+  const supabaseOwnerId = getSupabaseUserId(owner);
+
+  await supabaseRest("/jams", {
+    method: "POST",
+    prefer: "resolution=merge-duplicates,return=minimal",
+    body: {
+      id: jam.id,
+      code: jam.code,
+      host_user_id: supabaseOwnerId,
+      name: jam.name,
+      status: jam.status || "open",
+      created_at: jam.created_at || NOW().toISOString()
+    }
+  });
+
+  const hostMember = store.jamMembers.find((member) => member.jam_id === jam.id && member.user_id === jam.host_user_id);
+  if (!hostMember) return;
+
+  await supabaseRest("/jam_members", {
+    method: "POST",
+    prefer: "resolution=merge-duplicates,return=minimal",
+    body: {
+      id: hostMember.id,
+      jam_id: hostMember.jam_id,
+      user_id: supabaseOwnerId,
+      role: hostMember.role || "host",
+      joined_at: hostMember.joined_at || NOW().toISOString()
+    }
+  });
+}
+
+async function persistReservationCallJobToSupabase(job) {
+  if (!job || !canUseSupabaseRest()) return;
+  const owner = store.users.get(job.user_id);
+  if (!owner) return;
+  await ensureSupabaseProfile(owner);
+  const supabaseOwnerId = getSupabaseUserId(owner);
+  await supabaseRest("/reservation_call_jobs", {
+    method: "POST",
+    prefer: "resolution=merge-duplicates,return=minimal",
+    body: {
+      id: job.job_id,
+      user_id: supabaseOwnerId,
+      restaurant_name: job.restaurant_name,
+      reservation_time: job.reservation_time,
+      party_size: Number(job.party_size || 2),
+      special_request: job.special_request || "",
+      group_id: job.group_id || null,
+      target_number: job.target_number || "",
+      caller_number: job.caller_number || "",
+      call_sid: job.call_sid || null,
+      status: job.status || "queued",
+      decision_digit: job.decision_digit || "",
+      reservation_decision: job.reservation_decision || "pending",
+      retry_used: Number(job.retry_used || 0),
+      max_retries: Number(job.max_retries || 0),
+      last_error: job.last_error || "",
+      sms_state: job.sms_notifications?.state || "pending",
+      sms_sent: Number(job.sms_notifications?.sent || 0),
+      sms_failed: Number(job.sms_notifications?.failed || 0),
+      sms_recipients: Number(job.sms_notifications?.recipients || 0),
+      sms_errors_json: job.sms_notifications?.errors || [],
+      attempts_json: Array.isArray(job.attempts) ? job.attempts : [],
+      confirmed_reservation_id: job.confirmed_reservation_id || null,
+      confirmed_plan_id: job.confirmed_plan_id || null,
+      created_at: job.created_at || NOW().toISOString(),
+      updated_at: job.updated_at || NOW().toISOString()
+    }
+  });
+}
+
+function parseReservationStartTimestamp(reservationTimeText) {
+  const raw = String(reservationTimeText || "").trim();
+  if (!raw) return NOW().toISOString();
+
+  const direct = Date.parse(raw);
+  if (Number.isFinite(direct)) return new Date(direct).toISOString();
+
+  const match = raw.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+  if (!match) return NOW().toISOString();
+  let hour = Number(match[1] || 0);
+  const minute = Number(match[2] || 0);
+  const meridiem = String(match[3] || "").toLowerCase();
+  if (meridiem === "pm" && hour < 12) hour += 12;
+  if (meridiem === "am" && hour === 12) hour = 0;
+
+  const base = NOW();
+  base.setHours(hour, minute, 0, 0);
+  return base.toISOString();
+}
+
+async function persistCallConfirmationArtifacts(job) {
+  if (!job || !canUseSupabaseRest()) return { reservationId: "", planId: "" };
+  const owner = store.users.get(job.user_id);
+  if (!owner) return { reservationId: "", planId: "" };
+  await ensureSupabaseProfile(owner);
+  const supabaseOwnerId = getSupabaseUserId(owner);
+
+  const startTs = parseReservationStartTimestamp(job.reservation_time);
+  const endTs = new Date(new Date(startTs).getTime() + 90 * 60 * 1000).toISOString();
+  const reservationId = String(job.confirmed_reservation_id || `call_${job.job_id}`);
+
+  await supabaseRest("/restaurant_reservations", {
+    method: "POST",
+    prefer: "resolution=merge-duplicates,return=minimal",
+    body: {
+      id: job.job_id,
+      user_id: supabaseOwnerId,
+      reservation_id: reservationId,
+      restaurant_entity_id: `call:${job.job_id}`,
+      restaurant_name: String(job.restaurant_name || "Restaurant"),
+      slot_id: `call_slot_${String(job.job_id || "").slice(0, 8)}`,
+      start_ts: startTs,
+      end_ts: endTs,
+      party_size: Number(job.party_size || 2),
+      special_requests: job.special_request ? [String(job.special_request)] : [],
+      notes: `Confirmed by phone call${job.target_number ? ` to ${job.target_number}` : ""}`,
+      status: "confirmed",
+      provider: "twilio",
+      source: "voice_call",
+      reservation_url: null,
+      cancellation_policy: null,
+      updated_at: NOW().toISOString()
+    }
+  });
+
+  const createdPlan = {
+    id: randomUUID(),
+    host_user_id: job.user_id,
+    title: `Reservation: ${job.restaurant_name}`,
+    constraints_json: {
+      weather: "clear",
+      timeOfDay: "evening",
+      source: "reservation_call_confirmation",
+      call_job_id: job.job_id,
+      client_plan_payload: {
+        name: `Reservation: ${job.restaurant_name}`,
+        icon: "Utensils",
+        date: new Date(startTs).toLocaleDateString([], { month: "short", day: "numeric" }),
+        type: "event",
+        events: [
+          {
+            id: `reservation-${job.job_id}`,
+            name: `Table for ${job.party_size} at ${job.restaurant_name}`,
+            location: "Reservation confirmed by restaurant",
+            time: new Date(startTs).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
+            source: "custom",
+            icon: "Utensils",
+            note: job.special_request || "Created from reservation call confirmation.",
+          }
+        ]
+      }
+    },
+    status: "finalized",
+    finalized_option_json: {
+      source: "reservation_call",
+      restaurant_name: job.restaurant_name,
+      reservation_time: job.reservation_time,
+      party_size: job.party_size,
+      reservation_id: reservationId,
+    },
+    created_at: NOW().toISOString(),
+    options: []
+  };
+
+  store.plans.unshift(createdPlan);
+  await persistPlanToSupabase(createdPlan);
+  markStoreDirty();
+  return { reservationId, planId: createdPlan.id };
+}
+
+function hydrateReservationCallJobFromRow(row) {
+  if (!row) return null;
+  return {
+    job_id: row.id,
+    user_id: row.user_id,
+    restaurant_name: row.restaurant_name || "Restaurant",
+    reservation_time: row.reservation_time || "",
+    party_size: Number(row.party_size || 2),
+    special_request: row.special_request || "",
+    group_id: row.group_id || "",
+    target_number: row.target_number || "",
+    caller_number: row.caller_number || "",
+    status: row.status || "queued",
+    max_duration_seconds: RESERVATION_CALL_MAX_SECONDS,
+    max_retries: Number(row.max_retries || 0),
+    voice_script: "",
+    attempts: Array.isArray(row.attempts_json) ? row.attempts_json : [],
+    retry_used: Number(row.retry_used || 0),
+    call_sid: row.call_sid || null,
+    decision_digit: row.decision_digit || "",
+    reservation_decision: row.reservation_decision || "pending",
+    sms_notifications: {
+      state: row.sms_state || "pending",
+      sent: Number(row.sms_sent || 0),
+      failed: Number(row.sms_failed || 0),
+      recipients: Number(row.sms_recipients || 0),
+      errors: Array.isArray(row.sms_errors_json) ? row.sms_errors_json : []
+    },
+    confirmed_reservation_id: row.confirmed_reservation_id || "",
+    confirmed_plan_id: row.confirmed_plan_id || "",
+    last_error: row.last_error || "",
+    created_at: row.created_at || NOW().toISOString(),
+    updated_at: row.updated_at || NOW().toISOString()
+  };
+}
+
+async function loadReservationCallJobFromSupabase(jobId) {
+  if (!jobId || !canUseSupabaseRest()) return null;
+  const encodedJobId = encodeURIComponent(jobId);
+  const out = await supabaseRest(
+    `/reservation_call_jobs?select=*&id=eq.${encodedJobId}&limit=1`,
+    { method: "GET" }
+  );
+  if (!out.ok || !Array.isArray(out.data) || out.data.length === 0) return null;
+  const hydrated = hydrateReservationCallJobFromRow(out.data[0]);
+  if (!hydrated) return null;
+  store.reservationCallJobs.set(jobId, hydrated);
+  return hydrated;
+}
+
+async function getOrLoadReservationCallJob(jobId) {
+  if (!jobId) return null;
+  const inMemory = store.reservationCallJobs.get(jobId);
+  if (inMemory) return inMemory;
+  return loadReservationCallJobFromSupabase(jobId);
+}
+
 function serializeStore() {
   return {
     ...store,
@@ -226,6 +594,21 @@ function normalizeEmail(value) {
   return String(value || "").trim().toLowerCase();
 }
 
+function isUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ""));
+}
+
+function getSupabaseUserId(user) {
+  if (!user) return "";
+  if (isUuid(user.supabase_id)) return user.supabase_id;
+  if (isUuid(user.id)) {
+    user.supabase_id = user.id;
+    return user.id;
+  }
+  user.supabase_id = randomUUID();
+  return user.supabase_id;
+}
+
 function normalizePhone(value) {
   const digits = String(value || "").replace(/[^\d]/g, "");
   if (!digits) return "";
@@ -299,25 +682,57 @@ function requireSession(req, res) {
   if (req.cognitoUser?.userId) {
     return { token: "cognito", userId: req.cognitoUser.userId, user: req.cognitoUser.user };
   }
+
+  const resolveFromAppHeaders = () => {
+    const appUserIdRaw = String(req.header("x-app-user-id") || req.body?.user_id || "").trim();
+    const appUserEmail = normalizeEmail(req.header("x-app-user-email") || req.body?.email || "");
+    const appUserName = String(req.header("x-app-user-name") || req.body?.name || "SLO Student").trim() || "SLO Student";
+
+    if (!appUserIdRaw && !appUserEmail) return null;
+
+    let user = null;
+    if (appUserIdRaw) {
+      user = store.users.get(appUserIdRaw) || null;
+    }
+    if (!user && appUserEmail) {
+      user = [...store.users.values()].find((candidate) => candidate.email === appUserEmail) || null;
+    }
+
+    if (!user) {
+      const userId = appUserIdRaw || randomUUID();
+      const fallbackEmail = appUserEmail || `${String(userId).replace(/[^a-zA-Z0-9._-]/g, "").slice(0, 36)}@app.local`;
+      user = {
+        id: userId,
+        email: fallbackEmail,
+        display_name: appUserName,
+        cal_poly_email: fallbackEmail.endsWith("@calpoly.edu") ? fallbackEmail : "",
+        onboarding_complete: false,
+        created_at: NOW().toISOString(),
+        password: null
+      };
+      store.users.set(userId, user);
+      getOrInitPreferences(userId);
+      getOrInitConnections(userId);
+      markStoreDirty();
+    }
+
+    return { token: "app-header", userId: user.id, user };
+  };
+
   const token = req.header("x-session-token") || req.body?.sessionToken || req.query?.sessionToken;
-  if (!token) {
-    res.status(401).json({ error: "Missing session token" });
-    return null;
+  if (token) {
+    const userId = store.sessions.get(token);
+    if (userId) {
+      const user = store.users.get(userId);
+      if (user) return { token, userId, user };
+    }
   }
 
-  const userId = store.sessions.get(token);
-  if (!userId) {
-    res.status(401).json({ error: "Invalid session token" });
-    return null;
-  }
+  const appIdentity = resolveFromAppHeaders();
+  if (appIdentity) return appIdentity;
 
-  const user = store.users.get(userId);
-  if (!user) {
-    res.status(401).json({ error: "Session user not found" });
-    return null;
-  }
-
-  return { token, userId, user };
+  res.status(401).json({ error: token ? "Invalid session token" : "Missing session token" });
+  return null;
 }
 
 function getOrInitConnections(userId) {
@@ -618,30 +1033,43 @@ async function generateAssistantReply(payload) {
     if (!openai) {
       openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     }
+    let lastError = null;
+    for (const model of OPENAI_MODEL_FALLBACKS) {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          const response = await openai.responses.create({
+            model,
+            input: [
+              {
+                role: "system",
+                content: [
+                  "You are OpenJarvis for SLO Planner.",
+                  "Use the provided JSON app context as source of truth.",
+                  "Recommend concrete next actions from the user's real plans/tasks/events.",
+                  "When proposing writes, never claim they are complete before explicit confirmation.",
+                  "If user request is ambiguous, ask 1-2 concise clarifying questions first.",
+                  "Favor specific SLO suggestions with rationale tied to workload, weather, budget, and timing."
+                ].join(" ")
+              },
+              {
+                role: "user",
+                content: JSON.stringify(payload)
+              }
+            ]
+          });
 
-    const response = await openai.responses.create({
-      model: "gpt-4.1-mini",
-      input: [
-        {
-          role: "system",
-          content: [
-            "You are OpenJarvis for SLO Planner.",
-            "Use the provided JSON app context as source of truth.",
-            "Recommend concrete next actions from the user's real plans/tasks/events.",
-            "When proposing writes, never claim they are complete before explicit confirmation.",
-            "If user request is ambiguous, ask 1-2 concise clarifying questions first.",
-            "Favor specific SLO suggestions with rationale tied to workload, weather, budget, and timing."
-          ].join(" ")
-        },
-        {
-          role: "user",
-          content: JSON.stringify(payload)
+          return response.output_text || "I have a few recommendations ready.";
+        } catch (error) {
+          lastError = error;
+          const code = String(error?.code || "");
+          const status = Number(error?.status || 0);
+          const retryable = status === 429 || status >= 500 || code === "rate_limit_exceeded";
+          if (!retryable || attempt >= 1) break;
+          await new Promise((resolve) => setTimeout(resolve, 350 * (attempt + 1)));
         }
-      ]
-    });
-
-    return response.output_text || "I have a few recommendations ready.";
-  } catch {
+      }
+    }
+    console.error("OpenAI assistant reply failed", lastError?.message || lastError);
     return "I can still recommend options right now, but the AI model is temporarily unavailable.";
   }
 }
@@ -1028,7 +1456,7 @@ export function registerPlannerApi(app) {
     }
   });
 
-  app.post("/api/auth/signup", (req, res) => {
+  app.post("/api/auth/signup", async (req, res) => {
     const email = normalizeEmail(req.body?.email);
     const password = String(req.body?.password || "");
     const displayName = String(req.body?.displayName || "").trim() || "SLO Student";
@@ -1065,6 +1493,7 @@ export function registerPlannerApi(app) {
     getOrInitPreferences(userId);
     getOrInitConnections(userId);
     markStoreDirty();
+    await persistUserStateToSupabase(userId);
 
     const sessionToken = randomUUID();
     store.sessions.set(sessionToken, userId);
@@ -1081,7 +1510,7 @@ export function registerPlannerApi(app) {
     });
   });
 
-  app.post("/api/auth/signin", (req, res) => {
+  app.post("/api/auth/signin", async (req, res) => {
     const email = normalizeEmail(req.body?.email);
     const password = String(req.body?.password || "");
     if (!email || !password) {
@@ -1098,6 +1527,7 @@ export function registerPlannerApi(app) {
     const sessionToken = randomUUID();
     store.sessions.set(sessionToken, user.id);
     markStoreDirty();
+    await persistUserStateToSupabase(user.id);
     res.json({
       sessionToken,
       user: {
@@ -1141,7 +1571,7 @@ export function registerPlannerApi(app) {
     });
   });
 
-  app.post("/api/preferences", (req, res) => {
+  app.post("/api/preferences", async (req, res) => {
     const auth = requireSession(req, res);
     if (!auth) return;
 
@@ -1158,6 +1588,7 @@ export function registerPlannerApi(app) {
     store.preferences.set(auth.userId, next);
     auth.user.onboarding_complete = true;
     markStoreDirty();
+    await persistUserStateToSupabase(auth.userId);
 
     res.json({ preferences: next, onboarding_complete: true });
   });
@@ -1571,7 +2002,7 @@ export function registerPlannerApi(app) {
     res.json({ response });
   });
 
-  app.post("/api/plans", (req, res) => {
+  app.post("/api/plans", async (req, res) => {
     const auth = requireSession(req, res);
     if (!auth) return;
 
@@ -1594,7 +2025,69 @@ export function registerPlannerApi(app) {
 
     store.plans.push(plan);
     markStoreDirty();
-    res.json({ plan_id: plan.id, request_id: plan.id, options: plan.options });
+    await persistPlanToSupabase(plan);
+    res.json({ plan_id: plan.id, request_id: plan.id, options: plan.options, plan });
+  });
+
+  app.get("/api/plans", async (req, res) => {
+    const auth = requireSession(req, res);
+    if (!auth) return;
+
+    const inMemoryPlans = store.plans
+      .filter((candidate) => candidate.host_user_id === auth.userId)
+      .sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+
+    let supabasePlans = [];
+    if (canUseSupabaseRest()) {
+      const user = store.users.get(auth.userId);
+      if (user) {
+        const supabaseUserId = getSupabaseUserId(user);
+        const out = await supabaseRest(
+          `/plans?select=*&host_user_id=eq.${encodeURIComponent(supabaseUserId)}&order=created_at.desc`,
+          { method: "GET" }
+        );
+        if (out.ok && Array.isArray(out.data)) {
+          supabasePlans = out.data.map((row) => ({
+            id: row.id,
+            host_user_id: auth.userId,
+            title: row.title || "Plan",
+            constraints_json: row.constraints_json || {},
+            status: row.status || "draft",
+            finalized_option_json: row.finalized_option_json || null,
+            created_at: row.created_at || NOW().toISOString(),
+            options: []
+          }));
+        }
+      }
+    }
+
+    const mergedMap = new Map();
+    [...supabasePlans, ...inMemoryPlans].forEach((plan) => {
+      if (!plan?.id) return;
+      if (!mergedMap.has(plan.id)) mergedMap.set(plan.id, plan);
+    });
+
+    const plans = Array.from(mergedMap.values()).map((plan) => {
+      const client = plan.constraints_json?.client_plan_payload || {};
+      return {
+        id: plan.id,
+        title: plan.title,
+        status: plan.status || "draft",
+        created_at: plan.created_at,
+        constraints_json: plan.constraints_json || {},
+        finalized_option_json: plan.finalized_option_json || null,
+        client_plan_payload: {
+          name: String(client.name || plan.title || "Plan"),
+          icon: String(client.icon || "Clipboard"),
+          date: client.date || null,
+          type: client.type || "event",
+          events: Array.isArray(client.events) ? client.events : [],
+          notes: client.notes || null
+        }
+      };
+    });
+
+    res.json({ plans });
   });
 
   app.get("/api/plans/:id/results", (req, res) => {
@@ -1659,7 +2152,7 @@ export function registerPlannerApi(app) {
     res.json({ participant, plan });
   });
 
-  app.post("/api/jams", (req, res) => {
+  app.post("/api/jams", async (req, res) => {
     const auth = requireSession(req, res);
     if (!auth) return;
 
@@ -1681,6 +2174,7 @@ export function registerPlannerApi(app) {
       joined_at: NOW().toISOString()
     });
     markStoreDirty();
+    await persistJamToSupabase(jam);
 
     res.json({ jam, link: `/jam/${code}` });
   });
@@ -1851,6 +2345,8 @@ export function registerPlannerApi(app) {
       call_sid: null,
       decision_digit: "",
       reservation_decision: "pending",
+      confirmed_reservation_id: "",
+      confirmed_plan_id: "",
       sms_notifications: {
         state: "pending",
         sent: 0,
@@ -1864,10 +2360,12 @@ export function registerPlannerApi(app) {
     };
     store.reservationCallJobs.set(jobId, job);
     markStoreDirty();
+    await persistReservationCallJobToSupabase(job);
 
     try {
       await placeReservationCallAttempt(jobId, 0);
       const next = store.reservationCallJobs.get(jobId);
+      await persistReservationCallJobToSupabase(next);
       res.status(201).json({ call_job: next });
     } catch (error) {
       const failed = store.reservationCallJobs.get(jobId);
@@ -1876,6 +2374,7 @@ export function registerPlannerApi(app) {
       failed.updated_at = NOW().toISOString();
       store.reservationCallJobs.set(jobId, failed);
       markStoreDirty();
+      await persistReservationCallJobToSupabase(failed);
       res.status(502).json({ error: failed.last_error });
     }
   });
@@ -1883,19 +2382,24 @@ export function registerPlannerApi(app) {
   app.get("/api/agent/call/:jobId", (req, res) => {
     const auth = requireSession(req, res);
     if (!auth) return;
-    const job = store.reservationCallJobs.get(req.params.jobId);
-    if (!job || job.user_id !== auth.userId) {
-      res.status(404).json({ error: "Call job not found" });
-      return;
-    }
-    res.json({ call_job: job });
+    const send = async () => {
+      const job = await getOrLoadReservationCallJob(req.params.jobId);
+      if (!job || job.user_id !== auth.userId) {
+        res.status(404).json({ error: "Call job not found" });
+        return;
+      }
+      res.json({ call_job: job });
+    };
+    send().catch(() => {
+      res.status(500).json({ error: "Could not load call job" });
+    });
   });
 
-  app.post("/api/twilio/voice/reservation-twiml", (req, res) => {
+  app.post("/api/twilio/voice/reservation-twiml", async (req, res) => {
     const twiml = new twilio.twiml.VoiceResponse();
     try {
       const jobId = String(req.query?.jobId || "");
-      const job = store.reservationCallJobs.get(jobId);
+      const job = await getOrLoadReservationCallJob(jobId);
 
       if (!job) {
         twiml.say({ voice: "alice", language: "en-US" }, "This reservation request is no longer available. Goodbye.");
@@ -1939,7 +2443,7 @@ export function registerPlannerApi(app) {
     try {
       const jobId = String(req.query?.jobId || "");
       const digit = String(req.body?.Digits || "").trim();
-      const job = store.reservationCallJobs.get(jobId);
+      const job = await getOrLoadReservationCallJob(jobId);
       if (!job) {
         twiml.say({ voice: "alice", language: "en-US" }, "This reservation request has expired. Goodbye.");
         twiml.hangup();
@@ -1953,6 +2457,13 @@ export function registerPlannerApi(app) {
         job.reservation_decision = "confirmed";
         job.status = "reservation-confirmed";
         twiml.say({ voice: "alice", language: "en-US" }, "Thank you. Reservation confirmed.");
+        const persisted = await persistCallConfirmationArtifacts(job);
+        if (persisted?.reservationId) {
+          job.confirmed_reservation_id = persisted.reservationId;
+        }
+        if (persisted?.planId) {
+          job.confirmed_plan_id = persisted.planId;
+        }
         const smsResult = await sendGroupReservationSms({
           userId: job.user_id,
           groupId: job.group_id,
@@ -1990,6 +2501,7 @@ export function registerPlannerApi(app) {
       job.updated_at = NOW().toISOString();
       store.reservationCallJobs.set(jobId, job);
       markStoreDirty();
+      await persistReservationCallJobToSupabase(job);
     } catch {
       twiml.say({ voice: "alice", language: "en-US" }, "We could not process that input right now.");
     }
@@ -2004,7 +2516,7 @@ export function registerPlannerApi(app) {
     const attemptIndex = Number(req.query?.attempt || 0);
     const callStatus = String(req.body?.CallStatus || "").toLowerCase();
     const callSid = String(req.body?.CallSid || "");
-    const job = store.reservationCallJobs.get(jobId);
+    const job = await getOrLoadReservationCallJob(jobId);
 
     if (!job) {
       res.status(200).json({ ok: true });
@@ -2031,8 +2543,10 @@ export function registerPlannerApi(app) {
         job.updated_at = NOW().toISOString();
         store.reservationCallJobs.set(jobId, job);
         markStoreDirty();
+        await persistReservationCallJobToSupabase(job);
         try {
           await placeReservationCallAttempt(jobId, attemptIndex + 1);
+          await persistReservationCallJobToSupabase(store.reservationCallJobs.get(jobId));
         } catch (error) {
           const next = store.reservationCallJobs.get(jobId);
           next.status = "failed";
@@ -2040,6 +2554,7 @@ export function registerPlannerApi(app) {
           next.updated_at = NOW().toISOString();
           store.reservationCallJobs.set(jobId, next);
           markStoreDirty();
+          await persistReservationCallJobToSupabase(next);
         }
         res.status(200).json({ ok: true, retried: true });
         return;
@@ -2048,6 +2563,7 @@ export function registerPlannerApi(app) {
       job.updated_at = NOW().toISOString();
       store.reservationCallJobs.set(jobId, job);
       markStoreDirty();
+      await persistReservationCallJobToSupabase(job);
       res.status(200).json({ ok: true });
       return;
     }
@@ -2062,6 +2578,7 @@ export function registerPlannerApi(app) {
       job.updated_at = NOW().toISOString();
       store.reservationCallJobs.set(jobId, job);
       markStoreDirty();
+      await persistReservationCallJobToSupabase(job);
       res.status(200).json({ ok: true, decision_locked: true });
       return;
     }
@@ -2077,6 +2594,7 @@ export function registerPlannerApi(app) {
     job.updated_at = NOW().toISOString();
     store.reservationCallJobs.set(jobId, job);
     markStoreDirty();
+    await persistReservationCallJobToSupabase(job);
     res.status(200).json({ ok: true });
   });
 

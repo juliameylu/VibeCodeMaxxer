@@ -1,4 +1,5 @@
 import { HttpError, httpGetJson } from "./http";
+import { withApiBase } from "./baseUrl";
 
 async function postJson(path, body) {
   let response;
@@ -68,19 +69,19 @@ export function getMockReservationAvailability({
     query.set("date", String(date));
   }
 
-  return httpGetJson(`/api/mock-reservations/availability?${query.toString()}`);
+  return httpGetJson(withApiBase(`/api/mock-reservations/availability?${query.toString()}`));
 }
 
 export function bookMockReservation(payload) {
-  return postJson("/api/mock-reservations/book", payload);
+  return postJson(withApiBase("/api/mock-reservations/book"), payload);
 }
 
 export function listMockReservations(userId) {
-  return httpGetJson(`/api/mock-reservations/${encodeURIComponent(String(userId || ""))}`);
+  return httpGetJson(withApiBase(`/api/mock-reservations/${encodeURIComponent(String(userId || ""))}`));
 }
 
 export function bootstrapBackendUser(userContext, options = {}) {
-  return postJson("/api/users/bootstrap", {
+  return postJson(withApiBase("/api/users/bootstrap"), {
     user_id: userContext?.user_id || userContext?.id || "",
     email: userContext?.email || "",
     name: userContext?.name || userContext?.display_name || userContext?.username || "",
@@ -92,23 +93,23 @@ export function bootstrapBackendUser(userContext, options = {}) {
 }
 
 export function getBackendUserState(userId) {
-  return httpGetJson(`/api/users/${encodeURIComponent(String(userId || ""))}/state`);
+  return httpGetJson(withApiBase(`/api/users/${encodeURIComponent(String(userId || ""))}/state`));
 }
 
 export function listBackendUsers() {
-  return httpGetJson("/api/users");
+  return httpGetJson(withApiBase("/api/users"));
 }
 
 export function listBackendFriends(userId) {
-  return httpGetJson(`/api/users/${encodeURIComponent(String(userId || ""))}/friends`);
+  return httpGetJson(withApiBase(`/api/users/${encodeURIComponent(String(userId || ""))}/friends`));
 }
 
 export function updateBackendUserPreferences(userId, payload) {
-  return putJson(`/api/users/${encodeURIComponent(String(userId || ""))}/preferences`, payload || {});
+  return putJson(withApiBase(`/api/users/${encodeURIComponent(String(userId || ""))}/preferences`), payload || {});
 }
 
 export function linkBackendGoogleCalendar(userId, payload = {}) {
-  return postJson(`/api/users/${encodeURIComponent(String(userId || ""))}/calendar/link-google`, payload);
+  return postJson(withApiBase(`/api/users/${encodeURIComponent(String(userId || ""))}/calendar/link-google`), payload);
 }
 
 export function getUserAvailabilityOverlap(userId, otherUserId, params = {}) {
@@ -120,29 +121,33 @@ export function getUserAvailabilityOverlap(userId, otherUserId, params = {}) {
 
   const suffix = query.toString() ? `?${query.toString()}` : "";
   return httpGetJson(
-    `/api/users/${encodeURIComponent(String(userId || ""))}/overlap/${encodeURIComponent(String(otherUserId || ""))}${suffix}`,
+    withApiBase(`/api/users/${encodeURIComponent(String(userId || ""))}/overlap/${encodeURIComponent(String(otherUserId || ""))}${suffix}`),
   );
 }
 
 export function getBackendSystemState() {
-  return httpGetJson("/api/backend/state");
+  return httpGetJson(withApiBase("/api/backend/state"));
 }
 
 export function getJarvisChatSnapshot(userId) {
-  return httpGetJson(`/api/users/${encodeURIComponent(String(userId || ""))}/jarvis-chat`);
+  return httpGetJson(withApiBase(`/api/users/${encodeURIComponent(String(userId || ""))}/jarvis-chat`));
 }
 
 export function saveJarvisChatSnapshot(userId, payload = {}) {
-  return putJson(`/api/users/${encodeURIComponent(String(userId || ""))}/jarvis-chat`, payload || {});
+  return putJson(withApiBase(`/api/users/${encodeURIComponent(String(userId || ""))}/jarvis-chat`), payload || {});
 }
 
 export function listBackendEndpoints() {
-  return httpGetJson("/api/backend/endpoints");
+  return httpGetJson(withApiBase("/api/backend/endpoints"));
 }
 
 export function resetSupabaseAndSeed({ seed = true } = {}) {
-  return postJson("/api/admin/supabase/reset", {
+  return postJson(withApiBase("/api/admin/supabase/reset"), {
     confirm: "RESET_SUPABASE",
     seed,
   });
+}
+
+export function listBackendPlans() {
+  return httpGetJson(withApiBase("/api/plans"));
 }

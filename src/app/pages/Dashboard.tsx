@@ -15,6 +15,8 @@ import { getUserPreferences, getPreferenceScore, getPersonalizedGreeting } from 
 import { getSettings } from "../utils/settings";
 import { getPolyTree, recordSession, getTreeSpecies, treeSpecies, savePolyTree, type PolyTreeData } from "../utils/polytree";
 import { PolyTreeVis } from "../components/PolyTree";
+import { listBackendFriends, listBackendUsers } from "../../lib/api/backend";
+import { getSession } from "../../lib/auth/session";
 
 const TASKS_KEY = "polyjarvis_tasks";
 const FOCUS_LOG_KEY = "polyjarvis_focus_log";
@@ -120,7 +122,7 @@ const weekDeadlines = [
 ];
 
 
-const friendsData = [
+const defaultFriendsData = [
   { name: "Alex", status: "exploring", color: "#8BC34A", statusText: "Hiking Bishop Peak", available: true, icon: Mountain },
   { name: "Emma", status: "studying", color: "#F2E8CF", statusText: "Library grind", available: false, icon: Coffee },
   { name: "Jake", status: "chilling", color: "#64B5F6", statusText: "Scout Coffee", available: true, icon: Coffee },
@@ -200,7 +202,7 @@ const userLocIcon = L.divIcon({
   iconAnchor: [8, 8],
 });
 
-const friendsOnMap = [
+const defaultFriendsOnMap = [
   { id: "f1", name: "Alex", lat: 35.2698, lng: -120.6700, status: "Hiking Bishop Peak", color: "#4CAF50", emoji: "\u{1F33F}" },
   { id: "f2", name: "Emma", lat: 35.3020, lng: -120.6610, status: "Kennedy Library", color: "#1E88E5", emoji: "\u{1F4DA}" },
   { id: "f3", name: "Jake", lat: 35.2810, lng: -120.6590, status: "Scout Coffee", color: "#FF9800", emoji: "\u2615" },
@@ -248,6 +250,7 @@ type FocusPhase = "active" | "hold-to-exit" | "confirm" | "why" | null;
 
 export function Dashboard() {
   const navigate = useNavigate();
+  const [session] = useState(() => getSession());
   const [mode, setMode] = useState<DashMode>("explore");
   const [userName, setUserName] = useState("Explorer");
   const [weather, setWeather] = useState({ temp: 72, condition: "Sunny" });
@@ -276,7 +279,9 @@ export function Dashboard() {
 
   // Inline map state
   const [mapSelectedPlace, setMapSelectedPlace] = useState<Place | null>(null);
-  const [mapSelectedFriend, setMapSelectedFriend] = useState<typeof friendsOnMap[0] | null>(null);
+  const [friendsData, setFriendsData] = useState(defaultFriendsData);
+  const [friendsOnMap, setFriendsOnMap] = useState(defaultFriendsOnMap);
+  const [mapSelectedFriend, setMapSelectedFriend] = useState<typeof defaultFriendsOnMap[0] | null>(null);
   const [mapShowFriends, setMapShowFriends] = useState(true);
   const [mapShowBus, setMapShowBus] = useState(false);
   const [mapFilter, setMapFilter] = useState("All");
@@ -307,6 +312,59 @@ export function Dashboard() {
       localStorage.setItem(TASKS_KEY, JSON.stringify(defaultTasks));
     }
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    async function loadFriends() {
+      const userId = String(session?.user_id || "").trim();
+      if (!userId) return;
+      try {
+        const [friendsResponse, usersResponse] = await Promise.all([
+          listBackendFriends(userId),
+          listBackendUsers(),
+        ]);
+        if (!active) return;
+        const friendIds = Array.isArray(friendsResponse?.friend_user_ids)
+          ? friendsResponse.friend_user_ids.map((id: any) => String(id || ""))
+          : [];
+        const users = Array.isArray(usersResponse?.items) ? usersResponse.items : [];
+        const palette = ["#8BC34A", "#64B5F6", "#F2E8CF", "#FF9800", "#EF5350", "#9575CD"];
+        const rows = users
+          .filter((user: any) => friendIds.includes(String(user?.user_id || user?.id || "")))
+          .map((user: any, index: number) => {
+            const displayName = String(user?.name || user?.display_name || user?.email || "Friend");
+            const color = palette[index % palette.length];
+            return {
+              id: String(user?.user_id || user?.id || `friend-${index}`),
+              name: displayName,
+              status: "available",
+              color,
+              statusText: "On PolyJarvis",
+              available: true,
+              icon: Users,
+            };
+          });
+        if (rows.length > 0) {
+          setFriendsData(rows);
+          setFriendsOnMap(rows.map((friend: any, index: number) => ({
+            id: friend.id,
+            name: friend.name,
+            lat: CAL_POLY_LAT + (index % 3) * 0.004 - 0.004,
+            lng: CAL_POLY_LNG + Math.floor(index / 3) * 0.004 - 0.004,
+            status: friend.statusText,
+            color: friend.color,
+            emoji: "\u{1F4CD}",
+          })));
+        }
+      } catch {
+        // Keep fallback defaults when backend is unavailable.
+      }
+    }
+    loadFriends();
+    return () => {
+      active = false;
+    };
+  }, [session?.user_id]);
 
   const persistTasks = useCallback((updated: Task[]) => {
     setTasks(updated);

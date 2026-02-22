@@ -6,6 +6,7 @@ create table if not exists profiles (
   email text not null unique,
   display_name text,
   cal_poly_email text,
+  phone text,
   onboarding_complete boolean default false,
   mock_calendar_data_json jsonb not null default '{}'::jsonb,
   jarvis_chat_data_json jsonb not null default '{"messages":[],"updated_at":null}'::jsonb,
@@ -19,6 +20,7 @@ alter table profiles add column if not exists mock_calendar_data_json jsonb not 
 alter table profiles add column if not exists jarvis_chat_data_json jsonb not null default '{"messages":[],"updated_at":null}'::jsonb;
 alter table profiles add column if not exists canvas_link_data_json jsonb not null default '{}'::jsonb;
 alter table profiles add column if not exists mock_friend_user_ids uuid[] not null default '{}';
+alter table profiles add column if not exists phone text;
 
 create table if not exists preferences (
   user_id uuid primary key references profiles(id) on delete cascade,
@@ -216,6 +218,41 @@ create table if not exists restaurant_reservations (
 
 create index if not exists idx_restaurant_reservations_user_time
   on restaurant_reservations (user_id, start_ts desc);
+
+create table if not exists reservation_call_jobs (
+  id uuid primary key,
+  user_id uuid not null references profiles(id) on delete cascade,
+  restaurant_name text not null,
+  reservation_time text not null,
+  party_size integer not null default 2,
+  special_request text,
+  group_id text,
+  target_number text,
+  caller_number text,
+  call_sid text,
+  status text not null default 'queued',
+  decision_digit text default '',
+  reservation_decision text not null default 'pending',
+  retry_used integer not null default 0,
+  max_retries integer not null default 0,
+  last_error text,
+  sms_state text default 'pending',
+  sms_sent integer not null default 0,
+  sms_failed integer not null default 0,
+  sms_recipients integer not null default 0,
+  sms_errors_json jsonb not null default '[]'::jsonb,
+  attempts_json jsonb not null default '[]'::jsonb,
+  confirmed_reservation_id text,
+  confirmed_plan_id uuid,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
+alter table reservation_call_jobs add column if not exists confirmed_reservation_id text;
+alter table reservation_call_jobs add column if not exists confirmed_plan_id uuid;
+
+create index if not exists idx_reservation_call_jobs_user_created
+  on reservation_call_jobs (user_id, created_at desc);
 
 create index if not exists idx_events_catalog_created_at
   on events_catalog (created_at desc);

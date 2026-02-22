@@ -1404,7 +1404,9 @@ export function Jarvis() {
   const [recommendationMemory, setRecommendationMemory] = useState<RecommendationMemory | null>(null);
   const [pendingReservation, setPendingReservation] = useState<ReservationDraft | null>(null);
   const [keyboardOpen, setKeyboardOpen] = useState(false);
+  const [keyboardInset, setKeyboardInset] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const baselineViewportHeightRef = useRef(0);
   const reservationPollRef = useRef<number | null>(null);
   const reservationPollJobRef = useRef<string>("");
   const reservationFinalNotifiedRef = useRef<Record<string, boolean>>({});
@@ -1428,10 +1430,22 @@ export function Jarvis() {
       const focusedEditable = isEditable(active);
       if (!vv) {
         setKeyboardOpen(focusedEditable);
+        setKeyboardInset(0);
         return;
       }
-      const shrunk = vv.height < window.innerHeight * 0.9;
-      setKeyboardOpen(shrunk || focusedEditable);
+      const visibleHeight = vv.height + vv.offsetTop;
+      if (baselineViewportHeightRef.current <= 0) {
+        baselineViewportHeightRef.current = visibleHeight;
+      }
+      // When no editable is focused and the viewport is restored, refresh baseline.
+      if (!focusedEditable && visibleHeight > baselineViewportHeightRef.current - 40) {
+        baselineViewportHeightRef.current = Math.max(baselineViewportHeightRef.current, visibleHeight);
+      }
+      const baseline = baselineViewportHeightRef.current || visibleHeight;
+      const inset = Math.max(0, baseline - visibleHeight);
+      const shrunk = visibleHeight < baseline * 0.9;
+      setKeyboardInset(inset);
+      setKeyboardOpen(shrunk || focusedEditable || inset > 24);
     };
 
     const onFocusIn = (e: FocusEvent) => {
@@ -1531,6 +1545,9 @@ export function Jarvis() {
           let text = `Reservation update for ${job.restaurant_name || restaurantName}: still in progress.`;
           if (decision === "confirmed" || status === "reservation-confirmed") {
             text = `Reservation confirmed at ${job.restaurant_name || restaurantName} for ${job.party_size || "?"} at ${job.reservation_time || "requested time"}.`;
+            if (job.confirmed_plan_id) {
+              text += "\n\nI added this confirmed reservation to your Plans.";
+            }
           } else if (decision === "declined" || status === "reservation-declined") {
             text = `Reservation declined by ${job.restaurant_name || restaurantName}. Want me to try a different time?`;
           } else if (decision === "declined-timeout" || status === "reservation-timeout") {
@@ -2193,7 +2210,7 @@ export function Jarvis() {
       </div>
 
       {/* Floating prompt pills marquee — only shown on fresh conversations */}
-      {messages.length <= 2 && (
+      {messages.length <= 2 && !keyboardOpen && (
         <div className="flex-shrink-0 overflow-hidden py-2">
           <div className="flex mb-1.5">
             <div className="flex gap-1.5 shrink-0" style={{ animation: "jarvis-scroll-left 55s linear infinite" }}>
@@ -2225,7 +2242,7 @@ export function Jarvis() {
         className="flex-shrink-0"
         style={{
           marginBottom: keyboardOpen
-            ? "calc(env(safe-area-inset-bottom) + 2px)"
+            ? `calc(${keyboardInset}px + env(safe-area-inset-bottom) + 6px)`
             : "var(--bottom-nav-height, 76px)",
         }}
       >
@@ -2248,6 +2265,37 @@ export function Jarvis() {
             placeholder="Ask Jarvis anything..."
             value={input}
             onChange={e => setInput(e.target.value)}
+            onFocus={() => {
+              setKeyboardOpen(true);
+              const vv = window.visualViewport;
+              if (vv) {
+                const visibleHeight = vv.height + vv.offsetTop;
+                const baseline = baselineViewportHeightRef.current || visibleHeight;
+                setKeyboardInset(Math.max(0, baseline - visibleHeight));
+              }
+            }}
+            onBlur={() => {
+              setTimeout(() => {
+                const active = document.activeElement;
+                const stillEditing =
+                  active instanceof HTMLElement &&
+                  (active.tagName.toLowerCase() === "input" ||
+                    active.tagName.toLowerCase() === "textarea" ||
+                    active.isContentEditable);
+                if (stillEditing) return;
+                const vv = window.visualViewport;
+                if (!vv) {
+                  setKeyboardOpen(false);
+                  setKeyboardInset(0);
+                  return;
+                }
+                const visibleHeight = vv.height + vv.offsetTop;
+                const baseline = baselineViewportHeightRef.current || visibleHeight;
+                const inset = Math.max(0, baseline - visibleHeight);
+                setKeyboardInset(inset);
+                setKeyboardOpen(inset > 24);
+              }, 80);
+            }}
             onKeyDown={e => e.key === "Enter" && handleSend()}
             className="flex-1 bg-white/10 rounded-full px-4 py-2.5 text-[14px] text-white placeholder:text-white/30 focus:outline-none focus:ring-1 focus:ring-[#F2E8CF]/30 border border-white/15"
           />
@@ -2257,7 +2305,7 @@ export function Jarvis() {
         </div>
       </div>
 
-      <BottomNav />
+      {!keyboardOpen ? <BottomNav /> : null}
     </div>
   );
 }

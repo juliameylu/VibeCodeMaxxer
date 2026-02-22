@@ -4,6 +4,8 @@ import { toast } from "sonner";
 import { motion, AnimatePresence } from "motion/react";
 import { clsx } from "clsx";
 import { places } from "../data/places";
+import { apiFetch } from "../../lib/apiClient";
+import { listBackendPlans } from "../../lib/api/backend";
 
 import { PageHeader } from "../components/PageHeader";
 import { BottomNav } from "../components/BottomNav";
@@ -203,54 +205,33 @@ const planTemplates: Record<string, { name: string; icon: string; type: "trip" |
   },
 };
 
-const initialPlans: Plan[] = [
-  {
-    id: "p1",
-    name: "Pismo Day Trip",
-    icon: "Palmtree",
-    date: "Sat, Feb 28",
-    type: "trip",
-    events: [
-      { id: "e1", name: "Pick up Alex", location: "Grand Ave Dorms", time: "9:30 AM", source: "custom", icon: "Car" },
-      { id: "e2", name: "Get Zipcar", location: "Grand Ave Parking Structure", time: "9:45 AM", source: "custom", icon: "Car" },
-      { id: "e3", name: "Pismo Beach Pier", location: "Pismo Beach, CA", time: "10:30 AM", source: "explore", sourceId: "pismo-beach-pier-pismo-beach", icon: "Palmtree" },
-      { id: "e4", name: "Lunch at Splash Cafe", location: "Splash Cafe, Pismo", time: "12:00 PM", source: "custom", icon: "Utensils" },
-      { id: "e5", name: "Beach Crew Meetup", location: "Pismo Pier", time: "1:30 PM", source: "jam", sourceId: "j1", icon: "Users" },
-      { id: "e6", name: "Drive home", location: "SLO", time: "5:00 PM", source: "custom", icon: "Car" },
-    ],
-    shareCode: "PLAN-28",
-    createdAt: "Today",
-    notes: "Don't forget sunscreen! Alex is bringing the speaker.",
-  },
-  {
-    id: "p2",
-    name: "Saturday Errands",
-    icon: "Car",
-    date: "Sat, Mar 1",
-    type: "daily",
-    events: [
-      { id: "e7", name: "SLO Farmers' Market", location: "Downtown SLO", time: "6:00 PM", source: "explore", sourceId: "downtown-slo-farmers-market", icon: "ShoppingBag" },
-      { id: "e8", name: "Study session", location: "Kennedy Library", time: "2:00 PM", source: "explore", sourceId: "cal-poly-kennedy-library", icon: "BookOpen" },
-    ],
-    shareCode: "PLAN-01",
-    createdAt: "Yesterday",
-  },
-  {
-    id: "p3",
-    name: "Taco Tuesday",
-    icon: "Utensils",
-    date: "Tue, Feb 25",
-    type: "event",
-    events: [
-      { id: "e9", name: "Meet at Woodstock's", location: "Downtown SLO", time: "6:30 PM", source: "custom", icon: "Utensils" },
-      { id: "e10", name: "Tacos El Gordo", location: "Broad St", time: "7:15 PM", source: "custom", icon: "Utensils" },
-      { id: "e11", name: "Night walk downtown", location: "Higuera St", time: "8:30 PM", source: "custom", icon: "Star" },
-    ],
-    shareCode: "PLAN-TT",
-    createdAt: "3 days ago",
-    notes: "Group of 6. Everyone Venmo Sarah for tacos.",
-  },
-];
+const initialPlans: Plan[] = [];
+
+function mapBackendPlanToUi(plan: any): Plan {
+  const client = plan?.client_plan_payload || plan?.constraints_json?.client_plan_payload || {};
+  const events = Array.isArray(client?.events) ? client.events : [];
+  return {
+    id: String(plan?.id || Date.now().toString()),
+    name: String(client?.name || plan?.title || "Plan"),
+    icon: String(client?.icon || "Clipboard"),
+    date: client?.date || undefined,
+    type: (client?.type || "event") as "trip" | "daily" | "event",
+    events: events.map((event: any, index: number) => ({
+      id: String(event?.id || `${plan?.id || "plan"}-evt-${index}`),
+      name: String(event?.name || "Plan item"),
+      location: event?.location || undefined,
+      time: event?.time || undefined,
+      note: event?.note || undefined,
+      source: (event?.source || "custom") as EventSource,
+      sourceId: event?.sourceId || undefined,
+      icon: event?.icon || "Star",
+      completed: Boolean(event?.completed),
+    })),
+    shareCode: String(plan?.id || "").slice(0, 8).toUpperCase() || "PLAN",
+    createdAt: plan?.created_at ? new Date(plan.created_at).toLocaleDateString() : "Just now",
+    notes: client?.notes || undefined,
+  };
+}
 
 export function Plans() {
   const navigate = useNavigate();
@@ -295,10 +276,43 @@ export function Plans() {
   const [editNotesValue, setEditNotesValue] = useState("");
   const [showSettings, setShowSettings] = useState(false);
   const [showIconPicker, setShowIconPicker] = useState(false);
+  const [plansLoading, setPlansLoading] = useState(false);
 
   useEffect(() => {
     localStorage.setItem(PLANS_KEY, JSON.stringify(plans));
   }, [plans]);
+
+  const refreshPlansFromBackend = useCallback(async () => {
+    setPlansLoading(true);
+    try {
+      const response = await listBackendPlans();
+      const rows = Array.isArray(response?.plans) ? response.plans : [];
+      if (rows.length > 0) {
+        setPlans(rows.map(mapBackendPlanToUi));
+      } else {
+        setPlans([]);
+      }
+    } catch {
+      // Offline fallback from local cache
+      try {
+        const saved = localStorage.getItem(PLANS_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed)) setPlans(parsed);
+        }
+      } catch {
+        setPlans([]);
+      }
+    } finally {
+      setPlansLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshPlansFromBackend();
+    const interval = window.setInterval(refreshPlansFromBackend, 10000);
+    return () => window.clearInterval(interval);
+  }, [refreshPlansFromBackend]);
 
   // Handle incoming state (including Jarvis plan templates and Jam imports)
   const processedPlanState = useRef<string | null>(null);
@@ -418,7 +432,7 @@ export function Plans() {
     toast.success(`Template loaded: ${template.name}`);
   };
 
-  const finishCreate = () => {
+  const finishCreate = async () => {
     if (!newName.trim()) return;
     const plan: Plan = {
       id: Date.now().toString(),
@@ -430,11 +444,46 @@ export function Plans() {
       shareCode: generateCode(),
       createdAt: "Just now",
     };
-    setPlans([plan, ...plans]);
-    setSelectedPlan(plan);
-    setView("detail");
-    setDetailTab("timeline");
-    toast.success(`"${plan.name}" created!`);
+    try {
+      const created = await apiFetch("/api/plans", {
+        method: "POST",
+        body: {
+          title: plan.name,
+          constraints: {
+            client_plan_payload: {
+              name: plan.name,
+              icon: plan.icon,
+              date: plan.date || null,
+              type: plan.type || "event",
+              events: plan.events
+            },
+            weather: "clear",
+            timeOfDay: "evening"
+          }
+        }
+      });
+      const backendPlan = created?.plan || null;
+      if (backendPlan) {
+        const mapped = mapBackendPlanToUi(backendPlan);
+        setPlans((prev) => [mapped, ...prev.filter((item) => item.id !== mapped.id)]);
+        setSelectedPlan(mapped);
+      } else {
+        setPlans([plan, ...plans]);
+        setSelectedPlan(plan);
+      }
+      setView("detail");
+      setDetailTab("timeline");
+      toast.success(`"${plan.name}" created!`);
+      refreshPlansFromBackend();
+    } catch (error) {
+      setPlans([plan, ...plans]);
+      setSelectedPlan(plan);
+      setView("detail");
+      setDetailTab("timeline");
+      toast.success(`"${plan.name}" created!`);
+      const message = error instanceof Error ? error.message : "Could not sync plan to backend.";
+      toast.error(`Saved locally only: ${message}`);
+    }
   };
 
   const addRandomEvent = () => {
@@ -559,7 +608,7 @@ export function Plans() {
   ];
 
   return (
-    <div className="min-h-[100dvh] bg-transparent text-white pb-24 flex flex-col font-[system-ui]">
+    <div className="min-h-[100dvh] bg-transparent text-white pb-24 flex flex-col overflow-x-hidden font-[system-ui]">
       <PageHeader />
 
       <AnimatePresence mode="wait">
@@ -580,7 +629,7 @@ export function Plans() {
               </button>
               <div className="text-center">
                 <h1 className="text-base font-extrabold text-white">My Plans</h1>
-                <p className="text-[10px] text-[#F2E8CF]/60 font-semibold">{plans.length} plans</p>
+                <p className="text-[10px] text-[#F2E8CF]/60 font-semibold">{plansLoading ? "Syncing..." : `${plans.length} plans`}</p>
               </div>
               <div className="w-14" /> {/* Spacer for centering */}
             </div>
@@ -789,10 +838,11 @@ export function Plans() {
                     <h2 className="text-2xl font-bold text-white mb-1">When?</h2>
                     <p className="text-sm text-white/40 mb-6">Set a date for your plan.</p>
 
-                    <div className="mb-6">
+                    <div className="mb-6 min-w-0">
                       <label className="text-[10px] font-semibold text-[#F2E8CF]/50 capitalize tracking-wider block mb-2 flex items-center gap-1.5"><Calendar size={10} /> Date</label>
                       <input type="date" value={newDate} onChange={e => setNewDate(e.target.value)}
-                        className="w-full bg-white/10 border border-white/15 rounded-xl px-4 py-3 text-base text-white focus:outline-none focus:border-[#F2E8CF]/40 [color-scheme:dark]"
+                        className="w-full max-w-full min-w-0 overflow-hidden bg-white/10 border border-white/15 rounded-xl px-3 py-3 text-xs sm:text-sm text-white focus:outline-none focus:border-[#F2E8CF]/40 [color-scheme:dark] [appearance:none] [-webkit-appearance:none]"
+                        style={{ boxSizing: "border-box" }}
                       />
                     </div>
 
@@ -1361,7 +1411,7 @@ export function Plans() {
                     </div>
                     <input type="text" placeholder="Stop name (e.g. Dinner)" value={eventName} onChange={e => setEventName(e.target.value)} className="w-full bg-white/10 border border-white/15 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-[#F2E8CF]/40 text-sm" autoFocus />
                     <input type="text" placeholder="Location (optional)" value={eventLocation} onChange={e => setEventLocation(e.target.value)} className="w-full bg-white/10 border border-white/15 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-[#F2E8CF]/40 text-sm" />
-                    <input type="time" value={eventTime} onChange={e => setEventTime(e.target.value)} className="w-full bg-white/10 border border-white/15 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-[#F2E8CF]/40 [color-scheme:dark] text-sm" />
+                    <input type="time" value={eventTime} onChange={e => setEventTime(e.target.value)} className="w-full min-w-0 bg-white/10 border border-white/15 rounded-xl px-3 py-3 text-white focus:outline-none focus:border-[#F2E8CF]/40 [color-scheme:dark] text-xs sm:text-sm" />
                     <input type="text" placeholder="Note (optional)" value={eventNote} onChange={e => setEventNote(e.target.value)} className="w-full bg-white/10 border border-white/15 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-[#F2E8CF]/40 text-sm" />
                     <button onClick={handleAddEvent} className="w-full py-3.5 bg-[#F2E8CF] text-[#233216] rounded-xl font-bold mt-2 active:scale-[0.97] transition-transform text-sm">Add to Plan</button>
                  </div>

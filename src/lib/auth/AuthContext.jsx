@@ -15,8 +15,12 @@ const USER_ID_KEY = "slo_user_id";
 function setActiveUserId(user) {
   if (user?.id) {
     localStorage.setItem(USER_ID_KEY, user.id);
+    if (user?.email) localStorage.setItem("slo_user_email", String(user.email));
+    if (user?.display_name) localStorage.setItem("slo_user_name", String(user.display_name));
   } else {
     localStorage.removeItem(USER_ID_KEY);
+    localStorage.removeItem("slo_user_email");
+    localStorage.removeItem("slo_user_name");
   }
   window.dispatchEvent(new Event("slo-auth-changed"));
 }

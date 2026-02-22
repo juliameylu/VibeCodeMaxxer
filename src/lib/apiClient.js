@@ -22,6 +22,20 @@ export async function apiFetch(path, { method = "GET", body, headers = {}, withA
         // Ignore malformed local app session.
       }
     }
+
+    // Fallback identity headers for new auth flow when legacy app session is absent.
+    if (!mergedHeaders["x-app-user-id"]) {
+      const fallbackUserId = localStorage.getItem("slo_user_id");
+      if (fallbackUserId) mergedHeaders["x-app-user-id"] = String(fallbackUserId);
+    }
+    if (!mergedHeaders["x-app-user-email"]) {
+      const fallbackEmail = localStorage.getItem("slo_user_email");
+      if (fallbackEmail) mergedHeaders["x-app-user-email"] = String(fallbackEmail);
+    }
+    if (!mergedHeaders["x-app-user-name"]) {
+      const fallbackName = localStorage.getItem("slo_user_name");
+      if (fallbackName) mergedHeaders["x-app-user-name"] = String(fallbackName);
+    }
   }
 
   const response = await fetch(withApiBase(path), {

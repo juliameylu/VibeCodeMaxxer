@@ -57,6 +57,62 @@ body::before {
 .ios-scroll {
   -webkit-overflow-scrolling: touch;
 }
+
+/* Prevent native iOS controls from overflowing narrow cards. */
+input,
+select,
+textarea {
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+input[type="date"],
+input[type="time"] {
+  width: 100%;
+  min-width: 0;
+}
+
+/* iOS Safari/Capacitor date-time internals can exceed parent width unless constrained. */
+input[type="date"]::-webkit-datetime-edit,
+input[type="time"]::-webkit-datetime-edit,
+input[type="date"]::-webkit-datetime-edit-fields-wrapper,
+input[type="time"]::-webkit-datetime-edit-fields-wrapper {
+  min-width: 0;
+  max-width: 100%;
+}
+
+input[type="date"]::-webkit-date-and-time-value,
+input[type="time"]::-webkit-date-and-time-value {
+  min-width: 0;
+}
+
+/* Extra guard for Jam/Plan compact date-time fields in iOS WKWebView. */
+.mobile-date-field {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.mobile-date-field::-webkit-datetime-edit,
+.mobile-date-field::-webkit-datetime-edit-fields-wrapper {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.mobile-date-field::-webkit-date-and-time-value {
+  min-width: 0;
+  text-align: left;
+}
+
+.mobile-date-field::-webkit-calendar-picker-indicator {
+  margin: 0;
+  padding: 0;
+}
 @keyframes fadeIn {
   from {
     opacity: 0;

@@ -118,8 +118,10 @@ async function main() {
 
   upsertEnvValue(ENV_LOCAL_PATH, "TWILIO_PUBLIC_BASE_URL", ngrokUrl);
   upsertEnvValue(ENV_LOCAL_PATH, "VITE_API_BASE_URL", ngrokUrl);
+  upsertEnvValue(ENV_LOCAL_PATH, "PUBLIC_BASE_URL", ngrokUrl);
   prefixedLog("runner", `updated .env.local -> TWILIO_PUBLIC_BASE_URL=${ngrokUrl}`);
   prefixedLog("runner", `updated .env.local -> VITE_API_BASE_URL=${ngrokUrl}`);
+  prefixedLog("runner", `updated .env.local -> PUBLIC_BASE_URL=${ngrokUrl}`);
   prefixedLog("runner", `starting backend on port ${BACKEND_PORT} with fresh env...`);
   spawnProcess("backend", "node", ["backend/server.js"], {
     BACKEND_PORT: String(BACKEND_PORT),

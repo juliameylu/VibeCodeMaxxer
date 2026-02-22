@@ -6,6 +6,7 @@ import { BottomNav } from "../components/BottomNav";
 import { PageHeader } from "../components/PageHeader";
 import { copyToClipboard } from "../utils/clipboard";
 import { places } from "../data/places";
+import { apiFetch } from "../../lib/apiClient";
 import { 
   Plus, Users, ArrowLeft, ArrowRight, Share2, Send, Copy, ChevronRight, Trash2, 
   Hash, Lock, Vote, MapPin, Pin, Shuffle, Search, Image, Pencil, ThumbsUp, 
@@ -175,7 +176,7 @@ export function Jams() {
     setView("create");
   };
 
-  const finishCreate = () => {
+  const finishCreate = async () => {
     if (!newName.trim()) return;
     const jam: Jam = {
       id: Date.now().toString(), name: newName, emoji: "", code: generateCode(), isOwner: true, createdAt: "Just now",
@@ -190,6 +191,26 @@ export function Jams() {
     setView("detail");
     setActiveTab("chat");
     toast.success(`"${jam.name}" created!`);
+
+    try {
+      await apiFetch("/api/jams", {
+        method: "POST",
+        body: {
+          name: jam.name,
+          status: "open",
+          client_jam_payload: {
+            category: jam.category || "hangout",
+            customCategory: jam.customCategory || null,
+            date: jam.date || null,
+            time: jam.time || null,
+            events: jam.events || []
+          }
+        }
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not sync jam to backend.";
+      toast.error(`Saved locally only: ${message}`);
+    }
   };
 
   const openDetail = (jam: Jam) => {
@@ -693,7 +714,7 @@ export function Jams() {
                   {/* Step 1: Name + Image + Date */}
                   {createStep === "name" && (
                     <motion.div key="name" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                      className="bg-[#1a2e12]/60 backdrop-blur-xl rounded-2xl border border-white/8 p-5 shadow-2xl"
+                      className="bg-[#1a2e12]/60 backdrop-blur-xl rounded-2xl border border-white/8 p-5 shadow-2xl overflow-x-hidden"
                     >
                       <p className="text-[10px] text-white/30 capitalize tracking-wider font-semibold mb-1">Step 1 of 3</p>
                       <h2 className="text-2xl font-bold text-white mb-1">Name your jam</h2>
@@ -715,14 +736,14 @@ export function Jams() {
                         </button>
                       </div>
                       
-                      <div className="grid grid-cols-2 gap-3 mb-5">
-                        <div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-5">
+                        <div className="min-w-0">
                           <label className="text-[10px] font-semibold text-white/25 capitalize tracking-wider mb-1.5 block flex items-center gap-1"><Calendar size={9} /> Date</label>
-                          <input type="date" value={newDate} onChange={e => setNewDate(e.target.value)} className="w-full bg-white/8 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-[#F2E8CF]/30 [color-scheme:dark]" />
+                          <input type="date" value={newDate} onChange={e => setNewDate(e.target.value)} className="mobile-date-field w-full min-w-0 max-w-full bg-white/8 border border-white/10 rounded-xl px-3 py-2.5 text-xs sm:text-sm text-white focus:outline-none focus:border-[#F2E8CF]/30 [color-scheme:dark] [appearance:none] [-webkit-appearance:none]" />
                         </div>
-                        <div>
+                        <div className="min-w-0">
                           <label className="text-[10px] font-semibold text-white/25 capitalize tracking-wider mb-1.5 block flex items-center gap-1"><Clock size={9} /> Time</label>
-                          <input type="time" value={newTime} onChange={e => setNewTime(e.target.value)} className="w-full bg-white/8 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-[#F2E8CF]/30 [color-scheme:dark]" />
+                          <input type="time" value={newTime} onChange={e => setNewTime(e.target.value)} className="mobile-date-field w-full min-w-0 max-w-full bg-white/8 border border-white/10 rounded-xl px-3 py-2.5 text-xs sm:text-sm text-white focus:outline-none focus:border-[#F2E8CF]/30 [color-scheme:dark] [appearance:none] [-webkit-appearance:none]" />
                         </div>
                       </div>
 

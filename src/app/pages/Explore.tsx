@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { useNavigate, useSearchParams, useLocation } from "react-router";
 import { motion } from "motion/react";
 import Masonry, { ResponsiveMasonry } from "react-responsive-masonry";
-import { Search, MapPin, Pin, ArrowLeft, Car, Bus, DollarSign, Bike, ExternalLink, Sparkles, Zap } from "lucide-react";
+import { Search, MapPin, Pin, ArrowLeft, Car, Bus, DollarSign, Bike, ExternalLink, Sparkles, Zap, PhoneCall } from "lucide-react";
 import { places, getPlaceEmoji } from "../data/places";
 import { clsx } from "clsx";
 import { BottomNav } from "../components/BottomNav";
@@ -272,6 +272,13 @@ export function Explore() {
               EXPLORE SLO
             </h1>
           </div>
+          <button
+            onClick={() => navigate("/restaurants")}
+            className="inline-flex items-center gap-1.5 rounded-full bg-[#F2E8CF]/15 border border-[#F2E8CF]/25 px-3 py-1.5 text-[10px] font-black uppercase tracking-wider text-[#F2E8CF]"
+          >
+            <PhoneCall size={11} />
+            Booking Bot
+          </button>
         </div>
 
         {/* Search */}

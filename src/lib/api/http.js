@@ -11,13 +11,15 @@ export async function httpGetJson(url, options = {}) {
   let response;
 
   try {
+    const { cache, ...restOptions } = options || {};
     response = await fetch(url, {
       method: "GET",
+      cache: cache || "no-store",
       headers: {
         Accept: "application/json",
-        ...(options.headers || {}),
+        ...(restOptions.headers || {}),
       },
-      ...options,
+      ...restOptions,
     });
   } catch (error) {
     throw new HttpError("Network request failed. Please try again.", 0, error);

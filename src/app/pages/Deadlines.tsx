@@ -238,7 +238,7 @@ export function Deadlines() {
                   className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder:text-white/20 outline-none focus:border-[#8BC34A]/40"
                 />
                 <input type="time" value={newTask.time} onChange={e => setNewTask({ ...newTask, time: e.target.value })}
-                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white outline-none focus:border-[#8BC34A]/40 [color-scheme:dark]"
+                  className="w-full min-w-0 bg-white/5 border border-white/10 rounded-xl px-3 py-3 text-xs sm:text-sm text-white outline-none focus:border-[#8BC34A]/40 [color-scheme:dark]"
                 />
                 <div className="flex gap-2 pt-1">
                   <button onClick={() => setShowAddModal(false)} className="flex-1 py-3 text-white/25 font-bold">CANCEL</button>

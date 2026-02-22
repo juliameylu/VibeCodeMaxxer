@@ -1,14 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import {
   ArrowLeft,
   CalendarDays,
+  CornerDownLeft,
   Clock3,
   ExternalLink,
   Loader2,
   Sparkles,
   Users,
 } from "lucide-react";
+import { toast } from "sonner";
 import { BottomNav } from "../components/BottomNav";
 import { PageHeader } from "../components/PageHeader";
 import { usePlacesSearch } from "../../lib/hooks/usePlacesSearch";
@@ -216,6 +218,8 @@ export function Restaurants() {
   const [slotEligibilityError, setSlotEligibilityError] = useState("");
   const lastSeededProfileUserIdRef = useRef("");
   const lastPersistedPreferenceSignatureRef = useRef("");
+  const reservationFetchRequestIdRef = useRef(0);
+  const reservationAutoRefreshTimerRef = useRef<number | null>(null);
 
   const currentUserContext = useMemo(() => {
     if (!session?.email || !session?.timezone) return null;
@@ -587,7 +591,9 @@ export function Restaurants() {
     );
   }, [specialRequests]);
 
-  async function fetchReservationSlots(place: any, dateText: string) {
+  const fetchReservationSlots = useCallback(async (place: any, dateText: string) => {
+    const requestId = reservationFetchRequestIdRef.current + 1;
+    reservationFetchRequestIdRef.current = requestId;
     setReservationLoading(true);
     setReservationError("");
     setBookingStatus(null);
@@ -599,6 +605,7 @@ export function Restaurants() {
         restaurantName: place.name,
         date: dateText,
       });
+      if (reservationFetchRequestIdRef.current !== requestId) return;
 
       const slots = Array.isArray(response?.slots) ? response.slots : [];
       const matching = slots.filter((slot) => {
@@ -614,13 +621,42 @@ export function Restaurants() {
         setReservationError("This recommendation has no reservation slots inside the selected availability windows.");
       }
     } catch (err) {
+      if (reservationFetchRequestIdRef.current !== requestId) return;
       setReservationSlots([]);
       setSelectedSlotId("");
       setReservationError(err instanceof Error ? err.message : "Could not load reservation times.");
     } finally {
-      setReservationLoading(false);
+      if (reservationFetchRequestIdRef.current === requestId) {
+        setReservationLoading(false);
+      }
     }
-  }
+  }, [backendUserId, primaryWindowsForDate, sharedOnly, sharedWindowsForDate]);
+
+  useEffect(() => {
+    if (reservationAutoRefreshTimerRef.current) {
+      window.clearTimeout(reservationAutoRefreshTimerRef.current);
+      reservationAutoRefreshTimerRef.current = null;
+    }
+    if (!selectedPlace) return;
+
+    reservationAutoRefreshTimerRef.current = window.setTimeout(() => {
+      fetchReservationSlots(selectedPlace, reservationDate);
+    }, 220);
+
+    return () => {
+      if (reservationAutoRefreshTimerRef.current) {
+        window.clearTimeout(reservationAutoRefreshTimerRef.current);
+        reservationAutoRefreshTimerRef.current = null;
+      }
+    };
+  }, [
+    selectedPlace?.id,
+    reservationDate,
+    sharedOnly,
+    primaryWindowsForDate,
+    sharedWindowsForDate,
+    fetchReservationSlots,
+  ]);
 
   function toggleSpecialRequest(value: string) {
     setBookingInfoSubmitted(false);
@@ -636,6 +672,14 @@ export function Restaurants() {
     setPreferences((prev) =>
       prev.includes(value) ? prev.filter((item) => item !== value) : [...prev, value],
     );
+  }
+
+  function submitCustomPreference() {
+    const normalized = String(customPreference || "").trim();
+    if (!normalized) return;
+    setPreferences((prev) => [...new Set([...prev, normalized])].slice(0, 24));
+    setCustomPreference("");
+    setVisibleCount(6);
   }
 
   function resetFilters() {
@@ -864,15 +908,30 @@ export function Restaurants() {
                 </button>
               ))}
             </div>
-            <input
-              value={customPreference}
-              onChange={(event) => {
-                setVisibleCount(6);
-                setCustomPreference(event.target.value);
-              }}
-              placeholder="Custom preference (example: quiet patio, gluten free ramen)"
-              className="mt-2 w-full rounded-xl border border-white/15 bg-black/30 px-3 py-2 text-sm text-white outline-none"
-            />
+            <div className="mt-2 flex items-stretch gap-2">
+              <input
+                value={customPreference}
+                onChange={(event) => {
+                  setVisibleCount(6);
+                  setCustomPreference(event.target.value);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    submitCustomPreference();
+                  }
+                }}
+                placeholder="Custom preference (example: quiet patio, gluten free ramen)"
+                className="w-full rounded-xl border border-white/15 bg-black/30 px-3 py-2 text-sm text-white outline-none"
+              />
+              <button
+                onClick={submitCustomPreference}
+                className="px-3 rounded-xl border border-white/20 bg-white/10 text-white/80"
+                aria-label="Submit custom preference"
+              >
+                <CornerDownLeft size={14} />
+              </button>
+            </div>
             <p className="mt-1 text-[11px] text-white/45">
               Custom preference matches semantic keywords from Yelp category/tag/attribute/review text.
             </p>
@@ -976,12 +1035,12 @@ export function Restaurants() {
               </button>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-2">
               <input
                 type="date"
                 value={reservationDate}
                 onChange={(event) => setReservationDate(event.target.value)}
-                className="rounded-xl border border-white/15 bg-black/30 px-3 py-2 text-xs text-white outline-none"
+                className="w-full sm:w-auto min-w-0 rounded-xl border border-white/15 bg-black/30 px-3 py-2 text-xs text-white outline-none"
               />
               <button
                 onClick={() => fetchReservationSlots(selectedPlace, reservationDate)}
@@ -1014,16 +1073,28 @@ export function Restaurants() {
                   </button>
                 ))}
               </div>
-              <textarea
-                value={reservationNotes}
-                onChange={(event) => {
-                  setBookingInfoSubmitted(false);
-                  setReservationNotes(event.target.value.slice(0, 500));
-                }}
-                rows={3}
-                placeholder="Add accessibility/allergy/seating notes"
-                className="mt-2 w-full rounded-xl border border-white/15 bg-black/30 px-3 py-2 text-sm text-white outline-none"
-              />
+              <div className="mt-2 flex items-stretch gap-2">
+                <textarea
+                  value={reservationNotes}
+                  onChange={(event) => {
+                    setBookingInfoSubmitted(false);
+                    setReservationNotes(event.target.value.slice(0, 500));
+                  }}
+                  rows={3}
+                  placeholder="Add accessibility/allergy/seating notes"
+                  className="w-full rounded-xl border border-white/15 bg-black/30 px-3 py-2 text-sm text-white outline-none"
+                />
+                <button
+                  onClick={() => {
+                    setBookingInfoSubmitted(true);
+                    toast.success("Booking details submitted. Select a slot to continue.");
+                  }}
+                  className="self-start px-3 h-10 rounded-xl border border-white/20 bg-white/10 text-white/85"
+                  aria-label="Submit booking notes"
+                >
+                  <CornerDownLeft size={14} />
+                </button>
+              </div>
               <p className="mt-1 text-[11px] text-white/45">{reservationNotes.length}/500 chars</p>
               <button
                 onClick={() => {
