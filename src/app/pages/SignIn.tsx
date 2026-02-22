@@ -6,6 +6,8 @@ import { toast } from "sonner";
 import { User, Lock, ArrowRight, UserPlus, Mail, CalendarSync, Key, Hash, Info, Check, AlertCircle } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { JarvisLogo } from "../components/JarvisLogo";
+import { setSession } from "../../lib/auth/session";
+import { syncMockGoogleCalendarForUser } from "../../lib/hooks/useUserCalendarState";
 
 const natureBg = "https://images.unsplash.com/photo-1715559929451-4019bf7315a1?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxTYW4lMjBMdWlzJTIwT2Jpc3BvJTIwQmlzaG9wJTIwUGVhayUyMHNjZW5pYyUyMG1vdW50YWluJTIwbmF0dXJlJTIwYWVzdGhldGljfGVufDF8fHx8MTc3MTcxODgwM3ww&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral";
 
@@ -21,6 +23,30 @@ export function SignIn() {
   const [calendarLinked, setCalendarLinked] = useState(false);
   const [friendCode, setFriendCode] = useState("");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const persistAppSessionFromSupabaseUser = async () => {
+    const { data } = await supabase.auth.getUser();
+    const authUser = data?.user;
+    if (!authUser?.email) return null;
+
+    const emailLower = authUser.email.toLowerCase();
+    const username = emailLower.split("@")[0].replace(/[^a-z0-9._-]/g, "");
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Los_Angeles";
+    const displayName = String(
+      authUser.user_metadata?.name
+      || authUser.user_metadata?.full_name
+      || name
+      || username,
+    ).trim();
+
+    return setSession({
+      user_id: authUser.id,
+      username,
+      name: displayName,
+      email: emailLower,
+      timezone,
+    });
+  };
 
   // ---- Step 1: Auth ----
   const handleAuth = async (e: React.FormEvent) => {
@@ -67,6 +93,7 @@ export function SignIn() {
             if (error) {
               throw new Error("Account exists, but password didn't match. Please sign in with your correct password.");
             }
+            await persistAppSessionFromSupabaseUser();
             toast.success("Signed in!");
             navigate("/dashboard");
             return;
@@ -101,6 +128,7 @@ export function SignIn() {
            return;
         }
 
+        await persistAppSessionFromSupabaseUser();
         toast.success("Account created!");
         setStep(2); // → assignments setup
       } else {
@@ -116,6 +144,7 @@ export function SignIn() {
           throw error;
         }
         
+        await persistAppSessionFromSupabaseUser();
         toast.success("Signed in!");
         navigate("/dashboard");
       }
@@ -137,9 +166,29 @@ export function SignIn() {
     setStep(3);
   };
 
-  const handleCalendarSync = () => {
-    setCalendarLinked(true);
-    toast.success("Calendar synced!");
+  const handleCalendarSync = async () => {
+    setLoading(true);
+    try {
+      const session = await persistAppSessionFromSupabaseUser();
+      if (!session?.email) {
+        throw new Error("Sign in first to sync calendar.");
+      }
+
+      await syncMockGoogleCalendarForUser({
+        user_id: session.user_id,
+        email: session.email,
+        name: session.name,
+        username: session.username,
+        timezone: session.timezone,
+      });
+
+      setCalendarLinked(true);
+      toast.success("Google Calendar linked + availability synced.");
+    } catch (err: any) {
+      toast.error(err?.message || "Calendar sync failed.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   // ---- Step 3: Friend Code ----

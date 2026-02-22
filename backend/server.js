@@ -1,8 +1,12 @@
+import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import * as cheerio from "cheerio";
 import fs from "fs/promises";
 import { registerPlannerApi } from "./plannerApi.js";
+import eventsRouter from "./routes/eventsApi.js";
+import placesRouter from "./routes/placesApi.js";
+import reservationsRouter from "./routes/mockReservationsApi.js";
 
 const app = express();
 const PORT = Number(process.env.BACKEND_PORT || 8787);
@@ -789,6 +793,10 @@ app.get("/api/calpoly-now/events", async (req, res) => {
     });
   }
 });
+
+app.use(eventsRouter);
+app.use(placesRouter);
+app.use(reservationsRouter);
 
 registerPlannerApi(app);
 

@@ -4,9 +4,10 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently -k -n backend,frontend -c green,blue \"npm --prefix server run dev\" \"npm run dev:frontend\"",
+    "dev": "concurrently -k -n backend,frontend -c green,blue \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "node --watch backend/server.js",
     "dev:frontend": "vite",
-    "backend": "npm --prefix server run dev",
+    "backend": "node backend/server.js",
     "build": "vite build",
     "preview": "vite preview"
   },

@@ -7,6 +7,7 @@ import { projectId, publicAnonKey } from '/utils/supabase/info';
 import { toast } from "sonner";
 import { clsx } from 'clsx';
 import { createReservationIntent, getReservationIntent } from '../../lib/api/reservations';
+import { apiFetch } from "../../lib/apiClient";
 
 // Reusing the image mapping logic
 const categoryImages: Record<string, string> = {
@@ -96,18 +97,13 @@ export function EventDetails() {
 
   const loadBookingOptions = async () => {
     try {
-      const res = await fetch('/api/booking/intent', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-session-token': localStorage.getItem('slo_session_token') || ''
-        },
-        body: JSON.stringify({
+      const data = await apiFetch("/api/booking/intent", {
+        method: "POST",
+        body: {
           item_id: `event-${place.id}`,
           include_group_availability: includeGroupAvailability
-        })
+        },
       });
-      const data = await res.json();
       const slots = Array.isArray(data?.suggested_slots) ? data.suggested_slots : [];
       setBookingSlots(slots);
       setSelectedSlotId(slots[0]?.id || '');

@@ -16,6 +16,7 @@ import { Jams } from "./pages/Jams";
 import { Tutorial } from "./pages/Tutorial";
 import { Plans } from "./pages/Plans";
 import { Friends } from "./pages/Friends";
+import { Restaurants } from "./pages/Restaurants";
 
 export const router = createBrowserRouter([
   {
@@ -39,6 +40,7 @@ export const router = createBrowserRouter([
       { path: "tutorial", Component: Tutorial },
       { path: "plans", Component: Plans },
       { path: "friends", Component: Friends },
+      { path: "restaurants", Component: Restaurants },
       { path: "*", Component: NotFound },
     ],
   },

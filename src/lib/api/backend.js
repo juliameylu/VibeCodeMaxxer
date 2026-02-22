@@ -1,33 +1,24 @@
-import { HttpError } from "./http";
+import { HttpError, httpGetJson } from "./http";
 
-const BACKEND_BASE_URL =
-  import.meta.env.VITE_BACKEND_BASE_URL || "http://localhost:3001";
-
-async function backendRequest(path, options = {}) {
+async function postJson(path, body) {
   let response;
-
   try {
-    response = await fetch(`${BACKEND_BASE_URL}${path}`, {
+    response = await fetch(path, {
+      method: "POST",
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
-        ...(options.headers || {}),
       },
-      ...options,
+      body: JSON.stringify(body || {}),
     });
   } catch (error) {
-    throw new HttpError(
-      "Could not reach backend. Start server at http://localhost:3001.",
-      0,
-      error,
-    );
+    throw new HttpError("Network request failed. Please try again.", 0, error);
   }
 
-  const payload = await response.json().catch(() => null);
-
+  const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new HttpError(
-      payload?.error || `Backend request failed (${response.status})`,
+      payload?.error || payload?.message || `Request failed with status ${response.status}`,
       response.status,
       payload,
     );
@@ -36,83 +27,110 @@ async function backendRequest(path, options = {}) {
   return payload;
 }
 
-export async function createOrGetUser({ email, timezone }) {
-  return backendRequest("/api/users", {
-    method: "POST",
-    body: JSON.stringify({ email, timezone }),
-  });
+async function putJson(path, body) {
+  let response;
+  try {
+    response = await fetch(path, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(body || {}),
+    });
+  } catch (error) {
+    throw new HttpError("Network request failed. Please try again.", 0, error);
+  }
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new HttpError(
+      payload?.error || payload?.message || `Request failed with status ${response.status}`,
+      response.status,
+      payload,
+    );
+  }
+
+  return payload;
 }
 
-export async function getPreferences(userId) {
-  return backendRequest(`/api/preferences/${userId}`);
-}
-
-export async function updatePreferences(userId, payload) {
-  return backendRequest(`/api/preferences/${userId}`, {
-    method: "PUT",
-    body: JSON.stringify(payload),
-  });
-}
-
-export async function connectCalendar(userId, provider = "google") {
-  return backendRequest("/api/calendar/connect", {
-    method: "POST",
-    body: JSON.stringify({ user_id: userId, provider }),
-  });
-}
-
-export async function callbackCalendar(state) {
-  return backendRequest("/api/calendar/callback", {
-    method: "POST",
-    body: JSON.stringify({ state, code: "mock_oauth_code" }),
-  });
-}
-
-export async function syncCalendar(userId) {
-  return backendRequest("/api/calendar/sync", {
-    method: "POST",
-    body: JSON.stringify({ user_id: userId }),
-  });
-}
-
-export async function getCalendarStatus(userId) {
-  return backendRequest(`/api/calendar/status/${userId}`);
-}
-
-export async function getAvailability(userId, startTs, endTs) {
-  const search = new URLSearchParams();
-  if (startTs) search.set("start_ts", startTs);
-  if (endTs) search.set("end_ts", endTs);
-  const query = search.toString();
-  const suffix = query ? `?${query}` : "";
-  return backendRequest(`/api/availability/${userId}${suffix}`);
-}
-
-export async function getCalendarEvents(userId) {
-  return backendRequest(`/api/calendar/events/${userId}`);
-}
-
-export async function getMockReservationAvailability({
-  userId,
+export function getMockReservationAvailability({
   restaurantId,
-  restaurantName,
+  restaurantName = "Restaurant",
   date,
 }) {
-  const search = new URLSearchParams();
-  if (userId) search.set("user_id", userId);
-  search.set("restaurant_id", restaurantId);
-  if (restaurantName) search.set("restaurant_name", restaurantName);
-  if (date) search.set("date", date);
-  return backendRequest(`/api/mock-reservations/availability?${search.toString()}`);
+  const query = new URLSearchParams({
+    restaurant_id: String(restaurantId || ""),
+    restaurant_name: String(restaurantName || "Restaurant"),
+  });
+
+  if (date) {
+    query.set("date", String(date));
+  }
+
+  return httpGetJson(`/api/mock-reservations/availability?${query.toString()}`);
 }
 
-export async function bookMockReservation(payload) {
-  return backendRequest("/api/mock-reservations/book", {
-    method: "POST",
-    body: JSON.stringify(payload),
+export function bookMockReservation(payload) {
+  return postJson("/api/mock-reservations/book", payload);
+}
+
+export function listMockReservations(userId) {
+  return httpGetJson(`/api/mock-reservations/${encodeURIComponent(String(userId || ""))}`);
+}
+
+export function bootstrapBackendUser(userContext, options = {}) {
+  return postJson("/api/users/bootstrap", {
+    user_id: userContext?.user_id || userContext?.id || "",
+    email: userContext?.email || "",
+    name: userContext?.name || userContext?.display_name || userContext?.username || "",
+    timezone: userContext?.timezone || "America/Los_Angeles",
+    sync_calendar: Boolean(options.syncCalendar),
+    sync_supabase: options.syncSupabase !== false,
+    preferences: options.preferences || undefined,
   });
 }
 
-export async function getMockReservations(userId) {
-  return backendRequest(`/api/mock-reservations/${userId}`);
+export function getBackendUserState(userId) {
+  return httpGetJson(`/api/users/${encodeURIComponent(String(userId || ""))}/state`);
+}
+
+export function listBackendUsers() {
+  return httpGetJson("/api/users");
+}
+
+export function updateBackendUserPreferences(userId, payload) {
+  return putJson(`/api/users/${encodeURIComponent(String(userId || ""))}/preferences`, payload || {});
+}
+
+export function linkBackendGoogleCalendar(userId, payload = {}) {
+  return postJson(`/api/users/${encodeURIComponent(String(userId || ""))}/calendar/link-google`, payload);
+}
+
+export function getUserAvailabilityOverlap(userId, otherUserId, params = {}) {
+  const query = new URLSearchParams();
+  if (params.start_ts) query.set("start_ts", String(params.start_ts));
+  if (params.end_ts) query.set("end_ts", String(params.end_ts));
+  if (params.min_duration_min) query.set("min_duration_min", String(params.min_duration_min));
+  if (params.limit) query.set("limit", String(params.limit));
+
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return httpGetJson(
+    `/api/users/${encodeURIComponent(String(userId || ""))}/overlap/${encodeURIComponent(String(otherUserId || ""))}${suffix}`,
+  );
+}
+
+export function getBackendSystemState() {
+  return httpGetJson("/api/backend/state");
+}
+
+export function listBackendEndpoints() {
+  return httpGetJson("/api/backend/endpoints");
+}
+
+export function resetSupabaseAndSeed({ seed = true } = {}) {
+  return postJson("/api/admin/supabase/reset", {
+    confirm: "RESET_SUPABASE",
+    seed,
+  });
 }

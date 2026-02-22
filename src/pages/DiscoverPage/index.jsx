@@ -1,6 +1,7 @@
 import { MapPin, Sparkles, Star } from "lucide-react";
 import { useState } from "react";
 import MobileShell from "../../components/MobileShell";
+import { apiFetch } from "../../lib/apiClient";
 
 const SPOTS = [
   { id: 1, name: "The Brew", hint: "Quiet seating until 6 PM", distance: "0.3 mi" },
@@ -22,10 +23,9 @@ export default function DiscoverPage() {
     setError("");
 
     try {
-      const response = await fetch("/api/agent/chat", {
+      const data = await apiFetch("/api/agent/chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+        body: {
           message: prompt.trim(),
           tasks: [
             { title: "Finalize bio slides", done: false },
@@ -35,13 +35,8 @@ export default function DiscoverPage() {
             city: "San Luis Obispo",
             budget: "medium"
           }
-        })
+        },
       });
-
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data?.error || "Failed to contact planner agent.");
-      }
 
       setAgentReply(data.reply || "No response.");
       setPrompt("");

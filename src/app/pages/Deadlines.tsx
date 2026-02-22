@@ -5,6 +5,7 @@ import { Check, X, Plus, Users, Clock, ArrowRight, AlertCircle } from "lucide-re
 import { toast } from "sonner";
 import { BottomNav } from "../components/BottomNav";
 import { PageHeader } from "../components/PageHeader";
+import { apiFetch } from "../../lib/apiClient";
 
 interface Assignment {
   id: string;
@@ -91,15 +92,10 @@ export function Deadlines() {
     }
 
     try {
-      const response = await fetch("/api/canvas/connect/token", {
+      await apiFetch("/api/canvas/connect/token", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token }),
+        body: { token },
       });
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        throw new Error(data?.error || "Could not connect Canvas.");
-      }
       localStorage.setItem("canvas_token", token);
       setCanvasStatus("Canvas connected successfully.");
       setCanvasToken("");

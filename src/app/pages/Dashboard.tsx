@@ -10,6 +10,7 @@ import { JarvisLogo } from "../components/JarvisLogo";
 import { MustangIcon } from "../components/MustangIcon";
 import { PageHeader } from "../components/PageHeader";
 import { getUserPreferences, getPreferenceScore, getPersonalizedGreeting } from "../utils/preferences";
+import { apiFetch } from "../../lib/apiClient";
 
 const JAMS_KEY = "polyjarvis_jams";
 
@@ -429,15 +430,10 @@ export function Dashboard() {
       return;
     }
     try {
-      const response = await fetch("/api/canvas/connect/token", {
+      await apiFetch("/api/canvas/connect/token", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token }),
+        body: { token },
       });
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        throw new Error(data?.error || "Could not connect Canvas.");
-      }
       localStorage.setItem("canvas_token", token);
       setCanvasToken("");
       setCanvasStatus("Canvas connected. You can now sync assignments.");
@@ -1205,13 +1201,13 @@ export function Dashboard() {
                     <div className="w-10 h-10 bg-[#F2E8CF]/15 rounded-xl flex items-center justify-center text-lg flex-shrink-0">🤖</div>
                     <div className="flex-1">
                       <p className="text-xs font-black text-[#F2E8CF] uppercase tracking-wider">RESERVATION BOT</p>
-                      <p className="text-[10px] text-white/40 mt-0.5">Create mock reservation intents and auto-confirm them.</p>
+                      <p className="text-[10px] text-white/40 mt-0.5">Book restaurants using your availability and shared jam overlap.</p>
                     </div>
                     <button
-                      onClick={() => navigate('/event/event-brew-quiet')}
+                      onClick={() => navigate("/restaurants")}
                       className="text-[9px] font-black bg-[#F2E8CF]/20 text-[#F2E8CF] px-2 py-1 rounded-full border border-[#F2E8CF]/25"
                     >
-                      TRY NOW
+                      OPEN BOT
                     </button>
                   </div>
                 </div>

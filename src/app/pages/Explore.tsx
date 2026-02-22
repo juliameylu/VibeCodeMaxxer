@@ -2,25 +2,47 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { useNavigate, useSearchParams, useLocation } from "react-router";
 import { motion } from "motion/react";
 import Masonry, { ResponsiveMasonry } from "react-responsive-masonry";
-import { Search, MapPin, Pin, ArrowLeft, Car, Bus, DollarSign, Bike, ExternalLink, Sparkles, Zap } from "lucide-react";
+import { Search, MapPin, Pin, ArrowLeft, Car, Bus, DollarSign, Bike, ExternalLink, Sparkles, Zap, Ticket, RefreshCw, CalendarDays } from "lucide-react";
 import { places, getPlaceEmoji } from "../data/places";
 import { clsx } from "clsx";
 import { BottomNav } from "../components/BottomNav";
 import { PageHeader } from "../components/PageHeader";
 import { MustangIcon } from "../components/MustangIcon";
 import { getUserPreferences, getPreferenceScore, type UserPreferences } from "../utils/preferences";
+import { useCampusEvents } from "../../lib/hooks/useCampusEvents";
 
 const fallbackImage = "https://images.unsplash.com/photo-1551449440-f29f2e53104b?auto=format&fit=crop&w=800";
 
-// Events widget data (moved from Dashboard)
-const sloEvents = [
-  { id: "ev1", name: "Downtown Farmers Market", when: "Thu", time: "6–9 PM", emoji: "🥕" },
-  { id: "ev2", name: "SLO Brew Live Music", when: "Today", time: "8 PM", emoji: "🎵" },
-  { id: "ev3", name: "Bishop Peak Sunset Hike", when: "Tomorrow", time: "5 PM", emoji: "🌅" },
-  { id: "ev4", name: "Art After Dark", when: "Tomorrow", time: "6–9 PM", emoji: "🎨" },
-  { id: "ev5", name: "Cal Poly Basketball", when: "Sat", time: "7 PM", emoji: "🏀" },
-  { id: "ev6", name: "Pismo Car Show", when: "Sat", time: "10 AM", emoji: "🚗" },
+const EVENT_RANGE_OPTIONS = [
+  { label: "Today", value: "today" },
+  { label: "Tonight", value: "tonight" },
+  { label: "Week", value: "week" },
+  { label: "All", value: "all" },
 ];
+
+function formatEventWindow(startTime: string, endTime: string) {
+  const start = new Date(startTime);
+  const end = new Date(endTime || start);
+
+  return `${start.toLocaleDateString([], { month: "short", day: "numeric" })} · ${start.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}-${end.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+}
+
+function scoreEventPreferenceMatch(event: any, prefs: UserPreferences) {
+  if (!prefs.hasTrainingData) return 0;
+
+  const text = `${event?.title || ""} ${event?.category || ""} ${event?.description || ""}`.toLowerCase();
+  let score = 0;
+
+  prefs.likedPrompts.forEach((prompt) => {
+    const tokens = String(prompt.label || "")
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((token) => token.length > 2);
+    if (tokens.some((token) => text.includes(token))) score += 1;
+  });
+
+  return score;
+}
 
 export function Explore() {
   const navigate = useNavigate();
@@ -29,11 +51,18 @@ export function Explore() {
   const [searchQuery, setSearchQuery] = useState("");
   const [pinnedIds, setPinnedIds] = useState<string[]>([]);
   const [searchParams] = useSearchParams();
-  const [eventFilter, setEventFilter] = useState("Today");
+  const [eventRange, setEventRange] = useState("today");
+  const [eventsRefreshSeed, setEventsRefreshSeed] = useState(() => Date.now());
   const [priceFilter, setPriceFilter] = useState<string | null>(null);
   const [sortByPreference, setSortByPreference] = useState(true);
   const userPrefs = useMemo(() => getUserPreferences(), []);
   const initRef = useRef(false);
+  const { data: campusEventsData, isLoading: eventsLoading, error: eventsError } = useCampusEvents({
+    timeRange: eventRange,
+    category: "all",
+    query: "",
+    refresh: String(eventsRefreshSeed),
+  });
 
   // Read category from search params or router state on mount only
   useEffect(() => {
@@ -115,7 +144,20 @@ export function Explore() {
     return result;
   }, [activeCategory, searchQuery, priceFilter, userPrefs, sortByPreference]);
 
-  const filteredEvents = sloEvents.filter(e => e.when === eventFilter);
+  const filteredEvents = useMemo(() => {
+    const input = Array.isArray(campusEventsData?.items) ? campusEventsData.items : [];
+    const mapped = input.map((event: any) => {
+      const preferenceScore = scoreEventPreferenceMatch(event, userPrefs);
+      return { ...event, preferenceScore };
+    });
+
+    const sorted = mapped.sort((a: any, b: any) => {
+      if (b.preferenceScore !== a.preferenceScore) return b.preferenceScore - a.preferenceScore;
+      return new Date(a.startTime).getTime() - new Date(b.startTime).getTime();
+    });
+
+    return sorted.slice(0, 8);
+  }, [campusEventsData?.items, userPrefs]);
 
   return (
     <div className="min-h-[100dvh] bg-transparent text-white pb-20">
@@ -204,38 +246,83 @@ export function Explore() {
 
         <div className="bg-white/10 backdrop-blur-sm border border-white/15 rounded-xl p-3 mb-3">
           <div className="flex items-center justify-between mb-2">
-            <p className="text-[10px] font-black text-[#F2E8CF] uppercase tracking-widest">HAPPENING SOON</p>
-            <div className="flex gap-1">
-              {["Today", "Tomorrow", "Thu", "Sat"].map(d => (
+            <p className="text-[10px] font-black text-[#F2E8CF] uppercase tracking-widest">EVENTS THAT MATCH YOU</p>
+            <div className="flex items-center gap-1">
+              {EVENT_RANGE_OPTIONS.map((option) => (
                 <button
-                  key={d}
-                  onClick={() => setEventFilter(d)}
+                  key={option.value}
+                  onClick={() => setEventRange(option.value)}
                   className={`text-[9px] font-black px-2 py-1 rounded-md tracking-wider transition-all ${
-                    eventFilter === d
+                    eventRange === option.value
                       ? "bg-[#F2E8CF]/20 text-[#F2E8CF]"
                       : "text-white/30 hover:text-white/45"
                   }`}
                 >
-                  {d.toUpperCase()}
+                  {option.label.toUpperCase()}
                 </button>
               ))}
+              <button
+                onClick={() => setEventsRefreshSeed(Date.now())}
+                className="text-[9px] font-black px-2 py-1 rounded-md tracking-wider text-white/40 hover:text-white/70 inline-flex items-center gap-1"
+                title="Reload Cal Poly NOW + Ticketmaster"
+              >
+                <RefreshCw size={9} /> RELOAD
+              </button>
             </div>
           </div>
-          {filteredEvents.length === 0 ? (
-            <p className="text-xs text-white/25 text-center py-1">Nothing scheduled for {eventFilter}</p>
+          {eventsError ? (
+            <p className="text-xs text-red-200 py-1">Could not load events: {eventsError}</p>
+          ) : eventsLoading ? (
+            <p className="text-xs text-white/45 py-1">Loading live events...</p>
+          ) : filteredEvents.length === 0 ? (
+            <p className="text-xs text-white/25 text-center py-1">No events found for this range.</p>
           ) : (
             <div className="space-y-1">
-              {filteredEvents.map(ev => (
-                <div key={ev.id} className="flex items-center gap-3 bg-white/6 rounded-lg px-3 py-2">
-                  <span className="text-lg">{ev.emoji}</span>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-bold text-white/75 truncate">{ev.name}</p>
-                    <p className="text-[10px] text-white/35">{ev.time}</p>
+              {filteredEvents.map((event: any) => {
+                const source = String(event.source || "calpoly_now");
+                const isTicketmaster = source === "ticketmaster";
+                const actionLabel = isTicketmaster ? "BOOK TICKET" : "RSVP LINK";
+                const sourceLabel = isTicketmaster ? "Ticketmaster" : "Cal Poly NOW";
+
+                return (
+                  <div key={event.id} className="flex items-center gap-3 bg-white/6 rounded-lg px-3 py-2">
+                    <span className="text-lg">{isTicketmaster ? "🎟️" : "🎓"}</span>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-bold text-white/80 truncate">{event.title}</p>
+                      <p className="text-[10px] text-white/35 truncate">{formatEventWindow(event.startTime, event.endTime)}</p>
+                      <p className="text-[10px] text-white/45">{sourceLabel}</p>
+                    </div>
+                    <a
+                      href={event.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[9px] font-black text-[#F2E8CF] bg-[#F2E8CF]/15 border border-[#F2E8CF]/25 rounded-md px-2 py-1 whitespace-nowrap inline-flex items-center gap-1"
+                    >
+                      {isTicketmaster ? <Ticket size={9} /> : <ExternalLink size={9} />}
+                      {actionLabel}
+                    </a>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
+        </div>
+
+        <div className="bg-gradient-to-r from-[#F2E8CF]/8 to-[#64B5F6]/8 border border-[#F2E8CF]/12 rounded-xl p-3 mb-3">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 bg-[#F2E8CF]/15 rounded-xl flex items-center justify-center text-lg flex-shrink-0">🤖</div>
+            <div className="flex-1">
+              <p className="text-[10px] font-black text-[#F2E8CF] uppercase tracking-widest">BOOKING BOT</p>
+              <p className="text-[10px] text-white/45">Auto-matches your availability + friends/jam overlap before booking.</p>
+            </div>
+            <button
+              onClick={() => navigate("/restaurants")}
+              className="text-[9px] font-black bg-[#F2E8CF]/20 text-[#F2E8CF] px-2 py-1 rounded-full border border-[#F2E8CF]/25 inline-flex items-center gap-1"
+            >
+              <CalendarDays size={10} />
+              OPEN
+            </button>
+          </div>
         </div>
       </div>
 

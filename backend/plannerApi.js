@@ -13,6 +13,7 @@ const store = {
   sessions: new Map(),
   preferences: new Map(),
   connections: new Map(),
+  calendarEvents: new Map(),
   userEventStates: [],
   groups: [],
   groupMembers: [],
@@ -113,6 +114,62 @@ const VALID_RESERVATION_TRANSITIONS = {
   cancelled: new Set()
 };
 
+const DEFAULT_TIMEZONE = "America/Los_Angeles";
+
+const DUMMY_USER_SEEDS = [
+  {
+    id: "6f0f8e72-8717-4b8d-a2ea-e2dca4e5f111",
+    email: "faith@calpoly.edu",
+    display_name: "Faith Johnson",
+    password: "faith123",
+    preferences: {
+      categories: ["food", "outdoor", "campus"],
+      vibe: "chill",
+      budget: "medium",
+      transport: "walk",
+      price_max: "$$$",
+      distance_max_m: 3600,
+      diet_tags: ["dairy-free"],
+      event_tags: ["music", "talks", "networking"],
+      favorite_categories: ["coffee", "live-music", "late-night-study"],
+    },
+  },
+  {
+    id: "61fbbf57-b7c6-4ddd-aa9f-caf3afba2222",
+    email: "maria@calpoly.edu",
+    display_name: "Maria Lopez",
+    password: "maria123",
+    preferences: {
+      categories: ["food", "community", "events"],
+      vibe: "active",
+      budget: "medium",
+      transport: "bike",
+      price_max: "$$",
+      distance_max_m: 5200,
+      diet_tags: ["vegetarian"],
+      event_tags: ["community", "sports", "music"],
+      favorite_categories: ["group-dinners", "markets", "campus-events"],
+    },
+  },
+  {
+    id: "3f1b578d-51e6-4f84-b0f5-9cf6d4dc3333",
+    email: "devin@calpoly.edu",
+    display_name: "Devin Patel",
+    password: "devin123",
+    preferences: {
+      categories: ["events", "indoor", "campus"],
+      vibe: "chill",
+      budget: "low",
+      transport: "walk",
+      price_max: "$$",
+      distance_max_m: 2800,
+      diet_tags: [],
+      event_tags: ["study", "talks", "hackathon"],
+      favorite_categories: ["quiet-cafe", "study-late", "tech-events"],
+    },
+  },
+];
+
 function normalizePartySize(value) {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed) || parsed < 1 || parsed > 20) return null;
@@ -151,26 +208,230 @@ function normalizeEmail(value) {
   return String(value || "").trim().toLowerCase();
 }
 
+function normalizeTimezone(value) {
+  const tz = String(value || "").trim();
+  return tz || DEFAULT_TIMEZONE;
+}
+
+function normalizeDisplayName(value, fallbackEmail = "") {
+  const direct = String(value || "").trim();
+  if (direct) return direct.slice(0, 80);
+
+  const local = normalizeEmail(fallbackEmail).split("@")[0] || "Student";
+  return local
+    .replace(/[._-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (ch) => ch.toUpperCase())
+    .slice(0, 80);
+}
+
+function isUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    String(value || "").trim(),
+  );
+}
+
+function hashString(value) {
+  const text = String(value || "");
+  let hash = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    hash = (hash << 5) - hash + text.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash);
+}
+
+function toIsoOrNull(value) {
+  const text = String(value || "").trim();
+  if (!text) return null;
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toISOString();
+}
+
+function toIsoDate(value = NOW()) {
+  return new Date(value).toISOString().slice(0, 10);
+}
+
+function getSupabaseConfig() {
+  const url = String(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "")
+    .trim()
+    .replace(/\/+$/g, "");
+  const serviceRoleKey = String(process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
+  const anonKey = String(process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "").trim();
+
+  if (url && serviceRoleKey) {
+    return { url, key: serviceRoleKey, source: "service_role" };
+  }
+
+  if (url && anonKey) {
+    return { url, key: anonKey, source: "anon" };
+  }
+
+  return { url: "", key: "", source: "none" };
+}
+
+function hasSupabaseConfig(config) {
+  return Boolean(config.url && config.key);
+}
+
+async function callSupabaseRest(config, pathWithQuery, init = {}) {
+  const response = await fetch(`${config.url}/rest/v1/${pathWithQuery}`, {
+    ...init,
+    headers: {
+      apikey: config.key,
+      Authorization: `Bearer ${config.key}`,
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      ...(init.headers || {}),
+    },
+  });
+
+  const text = await response.text();
+  let payload = null;
+  if (text) {
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      payload = text;
+    }
+  }
+
+  if (!response.ok) {
+    const message =
+      typeof payload === "object" && payload && "message" in payload
+        ? String(payload.message || "Supabase REST request failed.")
+        : typeof payload === "object" && payload && "error" in payload
+          ? String(payload.error || "Supabase REST request failed.")
+          : `Supabase REST request failed (${response.status})`;
+    throw new Error(message);
+  }
+
+  return payload;
+}
+
+function findStoreUserByEmail(email) {
+  const normalized = normalizeEmail(email);
+  if (!normalized) return null;
+  return [...store.users.values()].find((candidate) => normalizeEmail(candidate.email) === normalized) || null;
+}
+
+function ensureStoreUserFromContext({
+  userId,
+  email,
+  displayName,
+  timezone = DEFAULT_TIMEZONE,
+  password = "",
+  onboardingComplete = true,
+}) {
+  const normalizedEmail = normalizeEmail(email);
+  const requestedUserId = String(userId || "").trim();
+
+  let user = requestedUserId ? store.users.get(requestedUserId) : null;
+  if (!user && normalizedEmail) {
+    user = findStoreUserByEmail(normalizedEmail);
+  }
+
+  if (user) {
+    user.email = normalizedEmail || user.email;
+    user.display_name = normalizeDisplayName(displayName || user.display_name, user.email);
+    user.cal_poly_email = user.email.endsWith("@calpoly.edu") ? user.email : "";
+    user.onboarding_complete = Boolean(user.onboarding_complete || onboardingComplete);
+    if (!user.password && password) user.password = String(password);
+    if (!user.created_at) user.created_at = NOW().toISOString();
+    return user;
+  }
+
+  if (!requestedUserId && !normalizedEmail) return null;
+
+  const resolvedUserId = requestedUserId || (isUuid(normalizedEmail) ? normalizedEmail : randomUUID());
+  const next = {
+    id: resolvedUserId,
+    email: normalizedEmail || `${resolvedUserId.slice(0, 8)}@local.mock`,
+    display_name: normalizeDisplayName(displayName, normalizedEmail),
+    cal_poly_email: normalizedEmail.endsWith("@calpoly.edu") ? normalizedEmail : "",
+    onboarding_complete: Boolean(onboardingComplete),
+    created_at: NOW().toISOString(),
+    password: String(password || `mock-${resolvedUserId}`),
+    timezone: normalizeTimezone(timezone),
+  };
+
+  store.users.set(next.id, next);
+  getOrInitPreferences(next.id);
+  getOrInitConnections(next.id);
+  return next;
+}
+
+function getAppContextFromRequest(req) {
+  const headerUserId = String(req.header("x-app-user-id") || "").trim();
+  const headerEmail = normalizeEmail(req.header("x-app-user-email") || "");
+  const headerName = String(req.header("x-app-user-name") || "").trim();
+  const headerTimezone = String(req.header("x-app-user-timezone") || "").trim();
+
+  const bodyUserId = String(req.body?.user_id || req.body?.userId || "").trim();
+  const bodyEmail = normalizeEmail(req.body?.email || "");
+  const bodyName = String(req.body?.name || req.body?.displayName || "").trim();
+  const bodyTimezone = String(req.body?.timezone || "").trim();
+
+  return {
+    userId: headerUserId || bodyUserId,
+    email: headerEmail || bodyEmail,
+    displayName: headerName || bodyName,
+    timezone: headerTimezone || bodyTimezone || DEFAULT_TIMEZONE,
+  };
+}
+
 function requireSession(req, res) {
   const token = req.header("x-session-token") || req.body?.sessionToken || req.query?.sessionToken;
-  if (!token) {
-    res.status(401).json({ error: "Missing session token" });
-    return null;
+  if (token) {
+    const userId = store.sessions.get(token);
+    if (!userId) {
+      res.status(401).json({ error: "Invalid session token" });
+      return null;
+    }
+
+    const user = store.users.get(userId);
+    if (!user) {
+      res.status(401).json({ error: "Session user not found" });
+      return null;
+    }
+
+    return { token, userId, user };
   }
 
-  const userId = store.sessions.get(token);
-  if (!userId) {
-    res.status(401).json({ error: "Invalid session token" });
-    return null;
+  const context = getAppContextFromRequest(req);
+  if (context.userId || context.email) {
+    const user = ensureStoreUserFromContext({
+      userId: context.userId,
+      email: context.email,
+      displayName: context.displayName,
+      timezone: context.timezone,
+      onboardingComplete: true,
+    });
+
+    if (user) {
+      return { token: null, userId: user.id, user };
+    }
   }
 
-  const user = store.users.get(userId);
-  if (!user) {
-    res.status(401).json({ error: "Session user not found" });
-    return null;
+  const fingerprint = `${req.ip || "local"}|${req.header("user-agent") || "browser"}`;
+  const hash = hashString(fingerprint).toString(16).padStart(12, "0").slice(-12);
+  const guestUserId = `00000000-0000-4000-8000-${hash}`;
+  const guest = ensureStoreUserFromContext({
+    userId: guestUserId,
+    email: `guest-${hash}@guest.local`,
+    displayName: "Guest",
+    timezone: DEFAULT_TIMEZONE,
+    onboardingComplete: false,
+  });
+
+  if (guest) {
+    return { token: null, userId: guest.id, user: guest };
   }
 
-  return { token, userId, user };
+  res.status(401).json({ error: "Missing session token" });
+  return null;
 }
 
 function getOrInitConnections(userId) {
@@ -182,6 +443,7 @@ function getOrInitConnections(userId) {
     calendar_ics_connected: false,
     canvas_connected: false,
     canvas_mode: null,
+    last_calendar_sync_at: null,
     updated_at: NOW().toISOString()
   };
   store.connections.set(userId, next);
@@ -197,11 +459,575 @@ function getOrInitPreferences(userId) {
     vibe: "chill",
     budget: "medium",
     transport: "walk",
+    price_max: "$$$",
+    distance_max_m: 3500,
+    diet_tags: [],
+    event_tags: [],
+    favorite_categories: [],
     updated_at: NOW().toISOString()
   };
   store.preferences.set(userId, next);
   return next;
 }
+
+function clampDistance(value, fallback = 3500) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isInteger(parsed) || parsed < 0) return fallback;
+  return Math.min(30000, parsed);
+}
+
+function normalizePriceMax(value, fallback = "$$$") {
+  const text = String(value || "").trim();
+  if (["$", "$$", "$$$", "$$$$"].includes(text)) return text;
+  return fallback;
+}
+
+function normalizeStringArray(value, limit = 24) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => String(item || "").trim().toLowerCase())
+    .filter(Boolean)
+    .slice(0, limit);
+}
+
+function mergePreferencePayload(userId, payload = {}) {
+  const current = getOrInitPreferences(userId);
+  const next = {
+    ...current,
+    categories: Array.isArray(payload.categories)
+      ? normalizeStringArray(payload.categories)
+      : current.categories,
+    vibe: payload.vibe ? String(payload.vibe).trim().toLowerCase() : current.vibe,
+    budget: payload.budget ? String(payload.budget).trim().toLowerCase() : current.budget,
+    transport: payload.transport ? String(payload.transport).trim().toLowerCase() : current.transport,
+    price_max: normalizePriceMax(payload.price_max, current.price_max || "$$$"),
+    distance_max_m:
+      payload.distance_max_m !== undefined
+        ? clampDistance(payload.distance_max_m, current.distance_max_m || 3500)
+        : current.distance_max_m || 3500,
+    diet_tags: Array.isArray(payload.diet_tags)
+      ? normalizeStringArray(payload.diet_tags)
+      : current.diet_tags || [],
+    event_tags: Array.isArray(payload.event_tags)
+      ? normalizeStringArray(payload.event_tags)
+      : current.event_tags || [],
+    favorite_categories: Array.isArray(payload.favorite_categories)
+      ? normalizeStringArray(payload.favorite_categories)
+      : current.favorite_categories || [],
+    updated_at: NOW().toISOString(),
+  };
+
+  store.preferences.set(userId, next);
+  return next;
+}
+
+function generateMockCalendarEventsForUser(userId, timezone = DEFAULT_TIMEZONE) {
+  const seed = hashString(`${userId}_${timezone}`);
+  const now = NOW();
+  const templates = [
+    { title: "CS Study Group", location: "Kennedy Library", hour: 18, durationMin: 90 },
+    { title: "Rec Center Workout", location: "Rec Center", hour: 20, durationMin: 60 },
+    { title: "Club Planning Meeting", location: "UU Plaza", hour: 17, durationMin: 75 },
+    { title: "Project Work Session", location: "Engineering East", hour: 19, durationMin: 120 },
+    { title: "Dinner with Friends", location: "Downtown SLO", hour: 21, durationMin: 75 },
+  ];
+
+  const events = [];
+  for (let dayOffset = 0; dayOffset < 7; dayOffset += 1) {
+    const eventCount = 2 + ((seed + dayOffset) % 2);
+    for (let index = 0; index < eventCount; index += 1) {
+      const template = templates[(seed + dayOffset + index) % templates.length];
+      const start = new Date(now);
+      start.setUTCDate(now.getUTCDate() + dayOffset);
+      start.setUTCHours(template.hour + ((seed + index) % 2), ((seed + index * 3) % 2) * 15, 0, 0);
+
+      const end = new Date(start);
+      end.setUTCMinutes(end.getUTCMinutes() + template.durationMin);
+
+      events.push({
+        id: `cal_evt_${Math.abs(hashString(`${userId}_${dayOffset}_${index}_${template.title}`))
+          .toString(36)
+          .slice(0, 10)}`,
+        user_id: userId,
+        title: template.title,
+        location: template.location,
+        start_at: start.toISOString(),
+        end_at: end.toISOString(),
+        source: "google_calendar",
+        timezone,
+      });
+    }
+  }
+
+  return events.sort((a, b) => new Date(a.start_at).getTime() - new Date(b.start_at).getTime());
+}
+
+function deriveAvailabilityFromEvents(userId, events, source = "google_calendar") {
+  const windows = [];
+  const now = NOW();
+
+  for (let dayOffset = 0; dayOffset < 7; dayOffset += 1) {
+    const dayStart = new Date(now);
+    dayStart.setUTCDate(now.getUTCDate() + dayOffset);
+    dayStart.setUTCHours(17, 0, 0, 0);
+
+    const dayEnd = new Date(dayStart);
+    dayEnd.setUTCHours(23, 0, 0, 0);
+
+    const busyBlocks = events
+      .map((event) => ({
+        start: new Date(event.start_at),
+        end: new Date(event.end_at),
+      }))
+      .filter((event) => event.end > dayStart && event.start < dayEnd)
+      .sort((a, b) => a.start.getTime() - b.start.getTime());
+
+    let cursor = new Date(dayStart);
+    busyBlocks.forEach((block) => {
+      if (block.start > cursor) {
+        windows.push({
+          id: randomUUID(),
+          user_id: userId,
+          start_at: cursor.toISOString(),
+          end_at: block.start.toISOString(),
+          source,
+          created_at: NOW().toISOString(),
+        });
+      }
+
+      if (block.end > cursor) {
+        cursor = new Date(block.end);
+      }
+    });
+
+    if (cursor < dayEnd) {
+      windows.push({
+        id: randomUUID(),
+        user_id: userId,
+        start_at: cursor.toISOString(),
+        end_at: dayEnd.toISOString(),
+        source,
+        created_at: NOW().toISOString(),
+      });
+    }
+  }
+
+  return windows;
+}
+
+function syncMockCalendarForUser(userId, timezone = DEFAULT_TIMEZONE) {
+  const events = generateMockCalendarEventsForUser(userId, timezone);
+  const windows = deriveAvailabilityFromEvents(userId, events, "google_calendar");
+  const nowIso = NOW().toISOString();
+
+  store.availabilities = store.availabilities.filter(
+    (row) => !(row.user_id === userId && ["google_calendar", "calendar_sync", "mock_calendar"].includes(row.source)),
+  );
+  store.availabilities.push(...windows);
+  store.calendarEvents.set(userId, events);
+
+  const connections = getOrInitConnections(userId);
+  connections.calendar_google_connected = true;
+  connections.last_calendar_sync_at = nowIso;
+  connections.updated_at = nowIso;
+  store.connections.set(userId, connections);
+
+  return {
+    synced_at: nowIso,
+    events_count: events.length,
+    windows_count: windows.length,
+  };
+}
+
+function getUserAvailability(userId, { startAt = null, endAt = null } = {}) {
+  if (!store.users.get(userId)) {
+    ensureStoreUserFromContext({
+      userId,
+      email: `${String(userId).replace(/[^a-z0-9._-]/gi, "").slice(0, 24) || "user"}@local.mock`,
+      displayName: "Local User",
+      timezone: DEFAULT_TIMEZONE,
+      onboardingComplete: true,
+    });
+  }
+
+  const normalizedStart = toIsoOrNull(startAt);
+  const normalizedEnd = toIsoOrNull(endAt);
+
+  const direct = store.availabilities
+    .filter((row) => row.user_id === userId)
+    .sort((a, b) => new Date(a.start_at).getTime() - new Date(b.start_at).getTime());
+
+  const rows = direct.length > 0 ? direct : (syncMockCalendarForUser(userId), store.availabilities.filter((row) => row.user_id === userId));
+
+  return rows.filter((row) => {
+    const start = new Date(row.start_at).getTime();
+    const end = new Date(row.end_at).getTime();
+    if (normalizedStart && end < new Date(normalizedStart).getTime()) return false;
+    if (normalizedEnd && start > new Date(normalizedEnd).getTime()) return false;
+    return true;
+  });
+}
+
+function intersectWindowSets(left, right) {
+  const intersections = [];
+
+  left.forEach((a) => {
+    const aStart = new Date(a.start_at).getTime();
+    const aEnd = new Date(a.end_at).getTime();
+
+    right.forEach((b) => {
+      const bStart = new Date(b.start_at).getTime();
+      const bEnd = new Date(b.end_at).getTime();
+
+      const start = Math.max(aStart, bStart);
+      const end = Math.min(aEnd, bEnd);
+
+      if (start < end) {
+        intersections.push({
+          id: `ov_${Math.abs(hashString(`${a.id}_${b.id}_${start}_${end}`))
+            .toString(36)
+            .slice(0, 10)}`,
+          start_at: new Date(start).toISOString(),
+          end_at: new Date(end).toISOString(),
+        });
+      }
+    });
+  });
+
+  return intersections.sort((a, b) => new Date(a.start_at).getTime() - new Date(b.start_at).getTime());
+}
+
+function findOverlapSlots(userIds = [], { startAt = null, endAt = null, minDurationMin = 20, limit = 10 } = {}) {
+  const uniqueUserIds = [...new Set((Array.isArray(userIds) ? userIds : []).map((id) => String(id || "").trim()).filter(Boolean))];
+  if (uniqueUserIds.length === 0) return [];
+
+  const availabilityByUser = uniqueUserIds.map((userId) => ({
+    userId,
+    windows: getUserAvailability(userId, { startAt, endAt }),
+  }));
+
+  if (availabilityByUser.some((row) => row.windows.length === 0)) {
+    return [];
+  }
+
+  let running = availabilityByUser[0].windows.map((window) => ({
+    id: window.id,
+    start_at: window.start_at,
+    end_at: window.end_at,
+  }));
+
+  for (let index = 1; index < availabilityByUser.length; index += 1) {
+    running = intersectWindowSets(running, availabilityByUser[index].windows);
+    if (running.length === 0) break;
+  }
+
+  return running
+    .map((slot) => ({
+      ...slot,
+      duration_min: Math.round((new Date(slot.end_at).getTime() - new Date(slot.start_at).getTime()) / 60000),
+      user_ids: uniqueUserIds,
+    }))
+    .filter((slot) => slot.duration_min >= minDurationMin)
+    .slice(0, limit);
+}
+
+function listCandidateParticipantUserIds(userId, includeGroup = false) {
+  if (!includeGroup) return [userId];
+  const others = [...store.users.keys()].filter((candidate) => candidate !== userId).slice(0, 2);
+  return [userId, ...others];
+}
+
+function bookingProviderForItem(item = {}) {
+  const category = String(item.category || "").toLowerCase();
+  if (["food", "coffee", "restaurant"].includes(category)) return "yelp";
+  if (category.includes("concert") || category.includes("music") || category.includes("sports")) return "ticketmaster";
+  return "calpoly_now";
+}
+
+function bookingOptions({ userId, item, includeGroup }) {
+  const participants = listCandidateParticipantUserIds(userId, includeGroup);
+  const overlapSlots = findOverlapSlots(participants, {
+    startAt: NOW().toISOString(),
+    endAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 5).toISOString(),
+    minDurationMin: 45,
+    limit: 8,
+  });
+
+  const provider = bookingProviderForItem(item);
+  let slots = overlapSlots.slice(0, 6).map((slot, index) => ({
+    id: `book_${Math.abs(hashString(`${slot.id}_${index}`))
+      .toString(36)
+      .slice(0, 9)}`,
+    start_at: slot.start_at,
+    end_at: slot.end_at,
+    overlap_user_count: slot.user_ids.length,
+    provider,
+  }));
+
+  if (slots.length === 0) {
+    const base = NOW();
+    base.setUTCHours(18, 0, 0, 0);
+    slots = Array.from({ length: 4 }).map((_, index) => {
+      const start = new Date(base);
+      start.setUTCDate(base.getUTCDate() + index);
+      start.setUTCHours(18 + (index % 2), index % 2 ? 30 : 0, 0, 0);
+      const end = new Date(start);
+      end.setUTCMinutes(end.getUTCMinutes() + 90);
+      return {
+        id: `book_fallback_${index + 1}`,
+        start_at: start.toISOString(),
+        end_at: end.toISOString(),
+        overlap_user_count: participants.length,
+        provider,
+      };
+    });
+  }
+
+  return { slots, provider, participants };
+}
+
+function buildUserState(userId) {
+  const user = store.users.get(userId);
+  if (!user) return null;
+
+  const preferences = getOrInitPreferences(userId);
+  const connections = getOrInitConnections(userId);
+  const availabilityRows = getUserAvailability(userId);
+  const availability = availabilityRows.map((row) => ({
+    window_id: row.id,
+    user_id: row.user_id,
+    start_ts: row.start_at,
+    end_ts: row.end_at,
+    source: row.source,
+  }));
+  const events = store.calendarEvents.get(userId) || [];
+  const calendarConnected = Boolean(connections.calendar_google_connected || connections.calendar_ics_connected);
+
+  return {
+    user: {
+      user_id: user.id,
+      email: user.email,
+      name: user.display_name || "",
+      timezone: user.timezone || DEFAULT_TIMEZONE,
+    },
+    preferences,
+    connections,
+    availability,
+    calendarStatus: {
+      status: calendarConnected ? "connected" : "disconnected",
+      provider: calendarConnected ? "google" : null,
+      last_sync_at: connections.last_calendar_sync_at || null,
+    },
+    syncedAt: connections.last_calendar_sync_at || null,
+    eventsCount: events.length,
+    lastAction: null,
+  };
+}
+
+async function upsertSupabaseUserState(userId) {
+  const config = getSupabaseConfig();
+  if (!hasSupabaseConfig(config)) {
+    return { ok: false, reason: "supabase_not_configured" };
+  }
+
+  const user = store.users.get(userId);
+  if (!user || !isUuid(user.id)) {
+    return { ok: false, reason: "user_not_uuid" };
+  }
+
+  const preferences = getOrInitPreferences(userId);
+  const connections = getOrInitConnections(userId);
+  const availabilityRows = getUserAvailability(userId);
+  const nowIso = NOW().toISOString();
+
+  await callSupabaseRest(config, "profiles?on_conflict=id", {
+    method: "POST",
+    headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+    body: JSON.stringify([
+      {
+        id: user.id,
+        email: normalizeEmail(user.email),
+        display_name: user.display_name || null,
+        cal_poly_email: normalizeEmail(user.email).endsWith("@calpoly.edu")
+          ? normalizeEmail(user.email)
+          : null,
+        onboarding_complete: Boolean(user.onboarding_complete),
+        created_at: user.created_at || nowIso,
+        updated_at: nowIso,
+      },
+    ]),
+  });
+
+  await callSupabaseRest(config, "preferences?on_conflict=user_id", {
+    method: "POST",
+    headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+    body: JSON.stringify([
+      {
+        user_id: user.id,
+        categories: preferences.categories || [],
+        vibe: preferences.vibe || "chill",
+        budget: preferences.budget || "medium",
+        transport: preferences.transport || "walk",
+        price_max: preferences.price_max || "$$$",
+        distance_max_m: preferences.distance_max_m || 3500,
+        diet_tags: preferences.diet_tags || [],
+        event_tags: preferences.event_tags || [],
+        favorite_categories: preferences.favorite_categories || [],
+        updated_at: nowIso,
+      },
+    ]),
+  });
+
+  await callSupabaseRest(config, "connections?on_conflict=user_id", {
+    method: "POST",
+    headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+    body: JSON.stringify([
+      {
+        user_id: user.id,
+        calendar_google_connected: Boolean(connections.calendar_google_connected),
+        calendar_ics_connected: Boolean(connections.calendar_ics_connected),
+        canvas_connected: Boolean(connections.canvas_connected),
+        canvas_mode: connections.canvas_mode || null,
+        last_calendar_sync_at: connections.last_calendar_sync_at || null,
+        updated_at: nowIso,
+      },
+    ]),
+  });
+
+  const deleteFromTimestamp = encodeURIComponent(`${toIsoDate()}T00:00:00.000Z`);
+  await callSupabaseRest(
+    config,
+    `user_availabilities?user_id=eq.${encodeURIComponent(user.id)}&start_at=gte.${deleteFromTimestamp}`,
+    {
+      method: "DELETE",
+      headers: { Prefer: "return=minimal" },
+    },
+  );
+
+  if (availabilityRows.length > 0) {
+    await callSupabaseRest(config, "user_availabilities", {
+      method: "POST",
+      headers: { Prefer: "return=minimal" },
+      body: JSON.stringify(
+        availabilityRows.map((row) => ({
+          id: row.id,
+          user_id: row.user_id,
+          start_at: row.start_at,
+          end_at: row.end_at,
+          source: row.source || "manual",
+          created_at: row.created_at || nowIso,
+        })),
+      ),
+    });
+  }
+
+  return { ok: true };
+}
+
+async function clearSupabaseAppTables() {
+  const config = getSupabaseConfig();
+  if (!hasSupabaseConfig(config)) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const tablePredicates = [
+    ["restaurant_reservations", "id"],
+    ["user_availabilities", "id"],
+    ["calendar_tokens", "user_id"],
+    ["ai_action_logs", "id"],
+    ["study_tasks", "id"],
+    ["jam_members", "id"],
+    ["jams", "id"],
+    ["invites", "id"],
+    ["plan_participants", "id"],
+    ["plan_options", "id"],
+    ["plans", "id"],
+    ["group_members", "id"],
+    ["groups", "id"],
+    ["user_event_states", "id"],
+    ["events_catalog", "id"],
+    ["connections", "user_id"],
+    ["preferences", "user_id"],
+    ["profiles", "id"],
+  ];
+
+  const cleared = [];
+  const errors = [];
+  for (const [table, key] of tablePredicates) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      await callSupabaseRest(config, `${table}?${key}=not.is.null`, {
+        method: "DELETE",
+        headers: { Prefer: "return=minimal" },
+      });
+      cleared.push(table);
+    } catch (error) {
+      errors.push({
+        table,
+        error: error instanceof Error ? error.message : "unknown_error",
+      });
+    }
+  }
+
+  return { cleared, errors };
+}
+
+async function seedSupabaseDummyUsers() {
+  for (const seed of DUMMY_USER_SEEDS) {
+    const user = ensureStoreUserFromContext({
+      userId: seed.id,
+      email: seed.email,
+      displayName: seed.display_name,
+      timezone: DEFAULT_TIMEZONE,
+      password: seed.password,
+      onboardingComplete: true,
+    });
+    mergePreferencePayload(user.id, seed.preferences);
+    syncMockCalendarForUser(user.id, DEFAULT_TIMEZONE);
+    // eslint-disable-next-line no-await-in-loop
+    await upsertSupabaseUserState(user.id).catch(() => null);
+  }
+
+  const config = getSupabaseConfig();
+  if (hasSupabaseConfig(config)) {
+    await callSupabaseRest(config, "events_catalog?on_conflict=id", {
+      method: "POST",
+      headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+      body: JSON.stringify(
+        store.eventsCatalog.map((event) => ({
+          id: event.id,
+          title: event.title,
+          category: event.category,
+          description: event.description,
+          payload: {
+            source: "planner_api_seed",
+            rating: event.rating,
+            distanceMiles: event.distanceMiles,
+            reasonTags: event.reasonTags,
+          },
+          created_at: NOW().toISOString(),
+        })),
+      ),
+    }).catch(() => null);
+  }
+}
+
+function seedDummyUsersInMemory() {
+  DUMMY_USER_SEEDS.forEach((seed) => {
+    const user = ensureStoreUserFromContext({
+      userId: seed.id,
+      email: seed.email,
+      displayName: seed.display_name,
+      timezone: DEFAULT_TIMEZONE,
+      password: seed.password,
+      onboardingComplete: true,
+    });
+    mergePreferencePayload(user.id, seed.preferences);
+    syncMockCalendarForUser(user.id, DEFAULT_TIMEZONE);
+  });
+}
+
+seedDummyUsersInMemory();
 
 function userBadges(userId) {
   const connections = getOrInitConnections(userId);
@@ -552,6 +1378,51 @@ async function generateStructuredAssistantReply({ message, context, cards, propo
   }
 }
 
+function collectApiEndpoints(app) {
+  const endpoints = [];
+  const seen = new Set();
+
+  function pushEndpoint(method, routePath) {
+    const upperMethod = String(method || "").toUpperCase();
+    const normalizedPath = String(routePath || "").trim();
+    if (!upperMethod || !normalizedPath.startsWith("/api/")) return;
+    const key = `${upperMethod} ${normalizedPath}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    endpoints.push({ method: upperMethod, path: normalizedPath });
+  }
+
+  function walkStack(stack) {
+    if (!Array.isArray(stack)) return;
+
+    for (const layer of stack) {
+      if (!layer) continue;
+
+      if (layer.route && layer.route.path) {
+        const methods = Object.keys(layer.route.methods || {}).filter(
+          (method) => layer.route.methods?.[method],
+        );
+        const paths = Array.isArray(layer.route.path) ? layer.route.path : [layer.route.path];
+        for (const routePath of paths) {
+          methods.forEach((method) => pushEndpoint(method, routePath));
+        }
+        continue;
+      }
+
+      if (layer.handle && Array.isArray(layer.handle.stack)) {
+        walkStack(layer.handle.stack);
+      }
+    }
+  }
+
+  walkStack(app?._router?.stack || []);
+
+  return endpoints.sort((a, b) => {
+    if (a.path === b.path) return a.method.localeCompare(b.method);
+    return a.path.localeCompare(b.path);
+  });
+}
+
 export function registerPlannerApi(app) {
   app.post("/api/auth/signup", (req, res) => {
     const email = normalizeEmail(req.body?.email);
@@ -577,7 +1448,8 @@ export function registerPlannerApi(app) {
       cal_poly_email: email.endsWith("@calpoly.edu") ? email : "",
       onboarding_complete: false,
       created_at: NOW().toISOString(),
-      password
+      password,
+      timezone: normalizeTimezone(req.body?.timezone),
     };
 
     store.users.set(userId, user);
@@ -593,7 +1465,8 @@ export function registerPlannerApi(app) {
         id: user.id,
         email: user.email,
         display_name: user.display_name,
-        onboarding_complete: user.onboarding_complete
+        onboarding_complete: user.onboarding_complete,
+        timezone: user.timezone || DEFAULT_TIMEZONE,
       }
     });
   });
@@ -620,7 +1493,8 @@ export function registerPlannerApi(app) {
         id: user.id,
         email: user.email,
         display_name: user.display_name,
-        onboarding_complete: user.onboarding_complete
+        onboarding_complete: user.onboarding_complete,
+        timezone: user.timezone || DEFAULT_TIMEZONE,
       }
     });
   });
@@ -638,7 +1512,8 @@ export function registerPlannerApi(app) {
         cal_poly_email: googleEmail.endsWith("@calpoly.edu") ? googleEmail : "",
         onboarding_complete: false,
         created_at: NOW().toISOString(),
-        password: `google-oauth-${randomUUID()}`
+        password: `google-oauth-${randomUUID()}`,
+        timezone: normalizeTimezone(req.body?.timezone),
       };
       store.users.set(userId, user);
       getOrInitPreferences(userId);
@@ -655,7 +1530,8 @@ export function registerPlannerApi(app) {
         id: user.id,
         email: user.email,
         display_name: user.display_name,
-        onboarding_complete: user.onboarding_complete
+        onboarding_complete: user.onboarding_complete,
+        timezone: user.timezone || DEFAULT_TIMEZONE,
       }
     });
   });
@@ -681,7 +1557,8 @@ export function registerPlannerApi(app) {
         id: user.id,
         email: user.email,
         display_name: user.display_name,
-        onboarding_complete: Boolean(user.onboarding_complete)
+        onboarding_complete: Boolean(user.onboarding_complete),
+        timezone: user.timezone || DEFAULT_TIMEZONE,
       },
       preferences: getOrInitPreferences(user.id),
       connections: getOrInitConnections(user.id),
@@ -690,24 +1567,252 @@ export function registerPlannerApi(app) {
     });
   });
 
+  app.get("/api/backend/endpoints", (_req, res) => {
+    const endpoints = collectApiEndpoints(app);
+    res.json({
+      endpoints,
+      total: endpoints.length,
+      generated_at: NOW().toISOString(),
+    });
+  });
+
+  app.get("/api/backend/state", (_req, res) => {
+    const users = [...store.users.values()].map((user) => {
+      const prefs = getOrInitPreferences(user.id);
+      const conn = getOrInitConnections(user.id);
+      const windows = getUserAvailability(user.id);
+      return {
+        user_id: user.id,
+        email: user.email,
+        name: user.display_name || "",
+        calendar_connected: Boolean(conn.calendar_google_connected || conn.calendar_ics_connected),
+        last_calendar_sync_at: conn.last_calendar_sync_at || null,
+        windows_count: windows.length,
+        events_count: (store.calendarEvents.get(user.id) || []).length,
+        preference_preview: {
+          price_max: prefs.price_max || "$$$",
+          distance_max_m: prefs.distance_max_m || 3500,
+          favorite_categories: prefs.favorite_categories || [],
+          event_tags: prefs.event_tags || [],
+          diet_tags: prefs.diet_tags || [],
+        },
+      };
+    });
+
+    res.json({
+      generated_at: NOW().toISOString(),
+      counts: {
+        users: users.length,
+        preferences: store.preferences.size,
+        connections: store.connections.size,
+        calendar_events: [...store.calendarEvents.values()].reduce((sum, rows) => sum + rows.length, 0),
+        availabilities: store.availabilities.length,
+        reservations: store.reservationIntents.length + store.reservations.length,
+        notifications: store.notifications.length,
+      },
+      users,
+      recent_reservation_intents: store.reservationIntents.slice(-10),
+      recent_notifications: store.notifications.slice(-10),
+    });
+  });
+
+  app.post("/api/admin/supabase/seed-dummy-users", async (_req, res) => {
+    try {
+      await seedSupabaseDummyUsers();
+      res.json({
+        ok: true,
+        seeded_users: DUMMY_USER_SEEDS.map((user) => ({
+          user_id: user.id,
+          email: user.email,
+          display_name: user.display_name,
+        })),
+      });
+    } catch (error) {
+      res.status(500).json({
+        ok: false,
+        error: error instanceof Error ? error.message : "Could not seed Supabase dummy users.",
+      });
+    }
+  });
+
+  app.post("/api/admin/supabase/reset", async (req, res) => {
+    const confirm = String(req.body?.confirm || "").trim();
+    if (confirm !== "RESET_SUPABASE") {
+      res.status(400).json({
+        ok: false,
+        error: "Set { confirm: \"RESET_SUPABASE\" } to run this destructive operation.",
+      });
+      return;
+    }
+
+    const shouldSeed = req.body?.seed !== false;
+    try {
+      const { cleared: cleared_tables, errors: clear_errors } = await clearSupabaseAppTables();
+      if (shouldSeed) {
+        await seedSupabaseDummyUsers();
+      }
+
+      res.json({
+        ok: true,
+        cleared_tables,
+        clear_errors,
+        seeded_dummy_users: shouldSeed ? DUMMY_USER_SEEDS.length : 0,
+      });
+    } catch (error) {
+      res.status(500).json({
+        ok: false,
+        error: error instanceof Error ? error.message : "Could not reset Supabase.",
+      });
+    }
+  });
+
+  app.get("/api/users", (_req, res) => {
+    const items = [...store.users.values()]
+      .map((user) => {
+        const state = buildUserState(user.id);
+        return {
+          user_id: user.id,
+          email: user.email,
+          name: user.display_name || "",
+          timezone: user.timezone || DEFAULT_TIMEZONE,
+          windows_count: state?.availability?.length || 0,
+          events_count: state?.eventsCount || 0,
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    res.json({ items, total: items.length });
+  });
+
+  app.post("/api/users/bootstrap", async (req, res) => {
+    const context = getAppContextFromRequest(req);
+    const payload = req.body || {};
+
+    const user = ensureStoreUserFromContext({
+      userId: context.userId || payload.user_id || payload.userId,
+      email: context.email || payload.email,
+      displayName: context.displayName || payload.name || payload.display_name,
+      timezone: context.timezone || payload.timezone,
+      password: payload.password || "",
+      onboardingComplete: true,
+    });
+
+    if (!user) {
+      res.status(400).json({ error: "user_id or email is required" });
+      return;
+    }
+
+    if (payload.preferences && typeof payload.preferences === "object") {
+      mergePreferencePayload(user.id, payload.preferences);
+    }
+
+    if (payload.sync_calendar || payload.syncCalendar) {
+      syncMockCalendarForUser(user.id, user.timezone || DEFAULT_TIMEZONE);
+    } else {
+      getUserAvailability(user.id);
+    }
+
+    if (payload.sync_supabase !== false) {
+      await upsertSupabaseUserState(user.id).catch(() => null);
+    }
+
+    const state = buildUserState(user.id);
+    res.json({
+      user_id: user.id,
+      state,
+    });
+  });
+
+  app.get("/api/users/:user_id/state", (req, res) => {
+    const userId = String(req.params.user_id || "").trim();
+    const user = store.users.get(userId);
+    if (!user) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+
+    const state = buildUserState(userId);
+    res.json(state);
+  });
+
+  app.put("/api/users/:user_id/preferences", async (req, res) => {
+    const userId = String(req.params.user_id || "").trim();
+    const user = store.users.get(userId);
+    if (!user) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+
+    const preferences = mergePreferencePayload(userId, req.body || {});
+    await upsertSupabaseUserState(userId).catch(() => null);
+
+    res.json({
+      user_id: userId,
+      preferences,
+    });
+  });
+
+  app.post("/api/users/:user_id/calendar/link-google", async (req, res) => {
+    const userId = String(req.params.user_id || "").trim();
+    const user = store.users.get(userId);
+    if (!user) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+
+    const timezone = normalizeTimezone(req.body?.timezone || user.timezone || DEFAULT_TIMEZONE);
+    user.timezone = timezone;
+    const sync = syncMockCalendarForUser(userId, timezone);
+    await upsertSupabaseUserState(userId).catch(() => null);
+
+    res.json({
+      user_id: userId,
+      provider: "google",
+      status: "connected",
+      ...sync,
+    });
+  });
+
+  app.get("/api/users/:user_id/overlap/:other_user_id", (req, res) => {
+    const userId = String(req.params.user_id || "").trim();
+    const otherUserId = String(req.params.other_user_id || "").trim();
+    if (!store.users.get(userId) || !store.users.get(otherUserId)) {
+      res.status(404).json({ error: "One or more users not found" });
+      return;
+    }
+
+    const slots = findOverlapSlots([userId, otherUserId], {
+      startAt: req.query.start_at || req.query.start_ts || null,
+      endAt: req.query.end_at || req.query.end_ts || null,
+      minDurationMin: Number.parseInt(String(req.query.min_duration_min || "20"), 10) || 20,
+      limit: Number.parseInt(String(req.query.limit || "20"), 10) || 20,
+    }).map((slot) => ({
+      overlap_id: slot.id,
+      start_ts: slot.start_at,
+      end_ts: slot.end_at,
+      duration_min: slot.duration_min,
+      user_ids: slot.user_ids,
+    }));
+
+    res.json({
+      user_ids: [userId, otherUserId],
+      overlap_slots: slots,
+      total: slots.length,
+    });
+  });
+
   app.post("/api/preferences", (req, res) => {
     const auth = requireSession(req, res);
     if (!auth) return;
 
-    const current = getOrInitPreferences(auth.userId);
-    const next = {
-      ...current,
-      categories: Array.isArray(req.body?.categories) ? req.body.categories : current.categories,
-      vibe: req.body?.vibe || current.vibe,
-      budget: req.body?.budget || current.budget,
-      transport: req.body?.transport || current.transport,
-      updated_at: NOW().toISOString()
-    };
-
-    store.preferences.set(auth.userId, next);
+    const next = mergePreferencePayload(auth.userId, req.body || {});
     auth.user.onboarding_complete = true;
+    upsertSupabaseUserState(auth.userId).catch(() => null);
 
-    res.json({ preferences: next, onboarding_complete: true });
+    res.json({
+      preferences: next,
+      onboarding_complete: true,
+    });
   });
 
   app.post("/api/calendar/google/connect-start", (req, res) => {
@@ -725,12 +1830,17 @@ export function registerPlannerApi(app) {
     const auth = requireSession(req, res);
     if (!auth) return;
 
-    const connections = getOrInitConnections(auth.userId);
-    connections.calendar_google_connected = true;
-    connections.updated_at = NOW().toISOString();
-    store.connections.set(auth.userId, connections);
+    const sync = syncMockCalendarForUser(auth.userId, auth.user?.timezone || DEFAULT_TIMEZONE);
+    upsertSupabaseUserState(auth.userId).catch(() => null);
 
-    res.json({ connected: true, provider: "google", connections });
+    res.json({
+      connected: true,
+      provider: "google",
+      connections: getOrInitConnections(auth.userId),
+      synced_at: sync.synced_at,
+      events_count: sync.events_count,
+      windows_count: sync.windows_count,
+    });
   });
 
   app.get("/api/availability", (req, res) => {
@@ -759,6 +1869,7 @@ export function registerPlannerApi(app) {
       created_at: NOW().toISOString()
     };
     store.availabilities.push(slot);
+    upsertSupabaseUserState(auth.userId).catch(() => null);
     res.json({ availability: slot, availabilities: getUserAvailability(auth.userId) });
   });
 
@@ -770,7 +1881,16 @@ export function registerPlannerApi(app) {
       .map((value) => value.trim())
       .filter(Boolean);
     const userIds = [...new Set([auth.userId, ...withIds])];
-    const slots = findOverlapSlots(userIds).slice(0, 8);
+    const slots = findOverlapSlots(userIds, {
+      startAt: req.query.start_at || req.query.start_ts || null,
+      endAt: req.query.end_at || req.query.end_ts || null,
+      minDurationMin: Number.parseInt(String(req.query.min_duration_min || "20"), 10) || 20,
+      limit: 8,
+    }).map((slot) => ({
+      ...slot,
+      start_ts: slot.start_at,
+      end_ts: slot.end_at,
+    }));
     res.json({ user_ids: userIds, overlap_slots: slots });
   });
 
@@ -783,6 +1903,37 @@ export function registerPlannerApi(app) {
     connections.calendar_ics_connected = true;
     connections.updated_at = NOW().toISOString();
     store.connections.set(auth.userId, connections);
+
+    if (events.length > 0) {
+      const mappedEvents = events
+        .map((event, index) => {
+          const start = event.start ? toIsoOrNull(event.start) : null;
+          if (!start) return null;
+          const end = new Date(start);
+          end.setUTCMinutes(end.getUTCMinutes() + 75);
+          return {
+            id: `ics_evt_${Math.abs(hashString(`${auth.userId}_${event.title}_${index}`))
+              .toString(36)
+              .slice(0, 9)}`,
+            user_id: auth.userId,
+            title: event.title || "ICS Event",
+            location: "Imported Calendar",
+            start_at: start,
+            end_at: end.toISOString(),
+            source: "ics_import",
+            timezone: auth.user?.timezone || DEFAULT_TIMEZONE,
+          };
+        })
+        .filter(Boolean);
+
+      const availability = deriveAvailabilityFromEvents(auth.userId, mappedEvents, "ics_import");
+      store.availabilities = store.availabilities.filter(
+        (row) => !(row.user_id === auth.userId && row.source === "ics_import"),
+      );
+      store.availabilities.push(...availability);
+    }
+
+    upsertSupabaseUserState(auth.userId).catch(() => null);
 
     res.json({ imported_count: events.length, sample: events.slice(0, 5), connections });
   });
@@ -832,6 +1983,7 @@ export function registerPlannerApi(app) {
       );
     }
 
+    upsertSupabaseUserState(auth.userId).catch(() => null);
     res.json({ connected: true, mode: "oauth", connections });
   });
 
@@ -851,6 +2003,7 @@ export function registerPlannerApi(app) {
     connections.updated_at = NOW().toISOString();
     store.connections.set(auth.userId, connections);
 
+    upsertSupabaseUserState(auth.userId).catch(() => null);
     res.json({ connected: true, mode: "manual", connections });
   });
 
@@ -1098,7 +2251,7 @@ export function registerPlannerApi(app) {
         plan_id: invite.entity_id,
         user_id: auth.userId,
         rsvp: response.rsvp,
-        availability_blocks_json: response.availability_blocks,
+        availability_blocks: response.availability_blocks,
         comment: response.comment
       });
     }
@@ -1197,7 +2350,7 @@ export function registerPlannerApi(app) {
       plan_id: plan.id,
       user_id: auth.userId,
       rsvp: req.body?.rsvp || "maybe",
-      availability_blocks_json: req.body?.availability_blocks || [],
+      availability_blocks: req.body?.availability_blocks || [],
       comment: req.body?.comment || ""
     };
     store.planParticipants.push(participant);
@@ -1652,16 +2805,44 @@ export function registerPlannerApi(app) {
     const auth = requireSession(req, res);
     if (!auth) return;
 
-    const itemId = req.body?.item_id || "event-brew-quiet";
+    const itemId = String(req.body?.item_id || "event-brew-quiet").trim();
     const includeGroup = Boolean(req.body?.include_group_availability);
-    const item = store.eventsCatalog.find((candidate) => candidate.id === itemId) || store.eventsCatalog[0];
+    const item = store.eventsCatalog.find((candidate) => candidate.id === itemId)
+      || {
+        id: itemId,
+        title: itemId.startsWith("restaurant:") ? "Restaurant Recommendation" : "Campus Event Recommendation",
+        category: itemId.startsWith("restaurant:") ? "food" : "campus",
+        vibe: "chill",
+        budget: "medium",
+        transport: "walk",
+        when: "today",
+        free: false,
+        rating: 4.3,
+        distanceMiles: 1.2,
+        reasonTags: ["availability-match"],
+        description: "Generated booking intent from mock reservation bot.",
+        link: "/explore",
+      };
     const { slots, provider, participants } = bookingOptions({ userId: auth.userId, item, includeGroup });
+    const overlapSlots = findOverlapSlots(participants, {
+      startAt: NOW().toISOString(),
+      endAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 5).toISOString(),
+      minDurationMin: 45,
+      limit: 6,
+    }).map((slot) => ({
+      overlap_id: slot.id,
+      start_ts: slot.start_at,
+      end_ts: slot.end_at,
+      duration_min: slot.duration_min,
+      user_ids: slot.user_ids,
+    }));
 
     res.json({
       item,
       provider,
       participants,
       suggested_slots: slots,
+      overlap_slots: overlapSlots,
       providers: [
         { name: "Yelp Reservations", deep_link: "https://www.yelp.com/reservations" },
         { name: "Ticketmaster", deep_link: "https://www.ticketmaster.com/" },

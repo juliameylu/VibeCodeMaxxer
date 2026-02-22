@@ -4,10 +4,12 @@ import { copyToClipboard } from "../utils/clipboard";
 import { useParams, useNavigate, useLocation } from "react-router";
 import { useState, useEffect, useMemo } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { ArrowLeft, MapPin, Clock, DollarSign, Car, Bus, Footprints, Bike, Share2, Pin, ExternalLink, Users, AlertTriangle, CheckCircle, Info, Sparkles, Zap } from "lucide-react";
+import { ArrowLeft, MapPin, Clock, DollarSign, Car, Bus, Footprints, Bike, Share2, Pin, ExternalLink, Users, AlertTriangle, CheckCircle, Info, Sparkles, Zap, CalendarDays, Loader2, X } from "lucide-react";
 import { places } from "../data/places";
 import { getUserPreferences, getPreferenceScore } from "../utils/preferences";
 import { MustangIcon } from "../components/MustangIcon";
+import { createReservationIntent, getReservationIntent } from "../../lib/api/reservations";
+import { apiFetch } from "../../lib/apiClient";
 
 const transportModes = [
   { id: "walk", label: "WALK", icon: Footprints, color: "#8BC34A" },
@@ -103,6 +105,15 @@ export function EventInfo() {
   const [myEvents, setMyEvents] = useState<{ id: string; status: "confirmed" | "maybe" }[]>([]);
   const [selectedTransport, setSelectedTransport] = useState<TransportMode>("walk");
   const [isPinned, setIsPinned] = useState(false);
+  const [showBookingBot, setShowBookingBot] = useState(false);
+  const [bookingDate, setBookingDate] = useState("");
+  const [bookingSlots, setBookingSlots] = useState<Array<{ id: string; start_at: string; end_at: string; provider?: string }>>([]);
+  const [selectedSlotId, setSelectedSlotId] = useState("");
+  const [includeGroupAvailability, setIncludeGroupAvailability] = useState(false);
+  const [bookingNotes, setBookingNotes] = useState("");
+  const [bookingLoading, setBookingLoading] = useState(false);
+  const [bookingError, setBookingError] = useState("");
+  const [reservationStatus, setReservationStatus] = useState<string | null>(null);
 
   // Use real preference scoring
   const userPrefs = useMemo(() => getUserPreferences(), []);
@@ -121,6 +132,41 @@ export function EventInfo() {
       else setSelectedTransport("walk");
     }
   }, [place]);
+
+  useEffect(() => {
+    if (!showBookingBot || !place) return;
+
+    let active = true;
+    setBookingLoading(true);
+    setBookingError("");
+
+    apiFetch("/api/booking/intent", {
+      method: "POST",
+      body: {
+        item_id: `event:${place.id}`,
+        include_group_availability: includeGroupAvailability,
+      },
+    })
+      .then((data: any) => {
+        if (!active) return;
+        const slots = Array.isArray(data?.suggested_slots) ? data.suggested_slots : [];
+        setBookingSlots(slots);
+        setSelectedSlotId(slots[0]?.id || "");
+      })
+      .catch((error: any) => {
+        if (!active) return;
+        setBookingSlots([]);
+        setSelectedSlotId("");
+        setBookingError(error instanceof Error ? error.message : "Could not load booking options.");
+      })
+      .finally(() => {
+        if (active) setBookingLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [includeGroupAvailability, place, showBookingBot]);
 
   if (!place) {
     return (
@@ -181,6 +227,47 @@ export function EventInfo() {
       navigator.share({ title: `Join me at ${place.name}`, text: msg }).catch(() => {});
     } else {
       window.open(`sms:?body=${encodeURIComponent(msg)}`, "_blank");
+    }
+  };
+
+  const selectedSlot = bookingSlots.find((slot) => slot.id === selectedSlotId) || null;
+
+  const handleConfirmBooking = async () => {
+    setBookingError("");
+    setBookingLoading(true);
+
+    try {
+      const datetime = selectedSlot?.start_at
+        || (bookingDate
+          ? new Date(`${bookingDate}T19:00:00`).toISOString()
+          : new Date(Date.now() + 1000 * 60 * 60 * 24).toISOString());
+      const idempotencyKey = `${place.id}:${datetime}:${includeGroupAvailability ? "group" : "solo"}`;
+
+      const created = await createReservationIntent({
+        venueId: `event:${place.id}`,
+        datetime,
+        partySize: includeGroupAvailability ? 4 : 2,
+        idempotencyKey,
+      });
+      setReservationStatus(created?.intent?.status || "pending");
+
+      if (created?.intent?.status === "pending") {
+        await new Promise((resolve) => setTimeout(resolve, 1300));
+        const latest = await getReservationIntent(created.intent.id);
+        setReservationStatus(latest?.intent?.status || "pending");
+        if (latest?.intent?.status === "confirmed") {
+          toast.success("Event reservation bot confirmed your booking.");
+        } else {
+          toast.message(`Reservation status: ${latest?.intent?.status || "pending"}`);
+        }
+      }
+
+      setShowBookingBot(false);
+    } catch (error) {
+      setBookingError(error instanceof Error ? error.message : "Could not create reservation intent.");
+      toast.error("Could not create event reservation.");
+    } finally {
+      setBookingLoading(false);
     }
   };
 
@@ -385,6 +472,17 @@ export function EventInfo() {
 
         {/* === PRIMARY ACTIONS — Confirm / Maybe === */}
         <div className="pt-3 space-y-3">
+          <button
+            onClick={() => {
+              setReservationStatus(null);
+              setShowBookingBot(true);
+            }}
+            className="w-full py-3.5 rounded-xl font-bold text-base flex items-center justify-center gap-2 transition-all active:scale-95 bg-[#F2E8CF]/10 text-[#F2E8CF] border border-[#F2E8CF]/20"
+          >
+            <CalendarDays size={18} />
+            RESERVE WITH BOT
+          </button>
+
           <div className="flex gap-3">
             <button
               onClick={() => handleRsvp("confirmed")}
@@ -417,8 +515,112 @@ export function EventInfo() {
           >
             <Users size={16} /> INVITE FRIENDS
           </button>
+
+          {reservationStatus ? (
+            <div className="rounded-xl border border-[#F2E8CF]/25 bg-[#F2E8CF]/10 px-3 py-2 text-xs text-[#F2E8CF] font-semibold uppercase tracking-wider text-center">
+              Reservation bot status: {reservationStatus}
+            </div>
+          ) : null}
         </div>
       </div>
+
+      <AnimatePresence>
+        {showBookingBot ? (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+            onClick={() => setShowBookingBot(false)}
+          >
+            <motion.div
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", damping: 24, stiffness: 260 }}
+              className="w-full max-w-md rounded-2xl border border-white/15 bg-[#0d1208]/95 p-4 space-y-3"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-black tracking-wider text-[#F2E8CF] uppercase">
+                  Event Reservation Bot
+                </p>
+                <button
+                  onClick={() => setShowBookingBot(false)}
+                  className="rounded-full bg-white/10 p-1.5 text-white/65"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+
+              <label className="block text-[10px] font-black tracking-wider text-white/40 uppercase">
+                Date fallback
+                <input
+                  type="date"
+                  value={bookingDate}
+                  onChange={(event) => setBookingDate(event.target.value)}
+                  className="mt-1 w-full rounded-xl border border-white/12 bg-black/30 px-3 py-2 text-xs text-white outline-none"
+                />
+              </label>
+
+              <label className="block text-[10px] font-black tracking-wider text-white/40 uppercase">
+                Suggested slot
+                <select
+                  value={selectedSlotId}
+                  onChange={(event) => setSelectedSlotId(event.target.value)}
+                  className="mt-1 w-full rounded-xl border border-white/12 bg-black/30 px-3 py-2 text-xs text-white outline-none"
+                >
+                  <option value="">Use fallback date @ 7:00 PM</option>
+                  {bookingSlots.map((slot) => (
+                    <option key={slot.id} value={slot.id}>
+                      {new Date(slot.start_at).toLocaleString()} - {new Date(slot.end_at).toLocaleTimeString()}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="inline-flex items-center gap-2 text-xs text-white/75 font-semibold">
+                <input
+                  type="checkbox"
+                  checked={includeGroupAvailability}
+                  onChange={(event) => setIncludeGroupAvailability(event.target.checked)}
+                  className="h-4 w-4 rounded accent-[#F2E8CF]"
+                />
+                Include friends/jam overlap
+              </label>
+
+              <textarea
+                rows={3}
+                value={bookingNotes}
+                onChange={(event) => setBookingNotes(event.target.value.slice(0, 280))}
+                placeholder="Notes for your reservation assistant"
+                className="w-full rounded-xl border border-white/12 bg-black/30 px-3 py-2 text-xs text-white outline-none"
+              />
+
+              {bookingError ? <p className="text-xs text-red-300">{bookingError}</p> : null}
+              {reservationStatus ? (
+                <p className="text-xs text-[#F2E8CF] font-semibold uppercase tracking-wider">
+                  Latest status: {reservationStatus}
+                </p>
+              ) : null}
+
+              <button
+                onClick={handleConfirmBooking}
+                disabled={bookingLoading}
+                className="w-full rounded-xl bg-[#F2E8CF] px-3 py-3 text-xs font-black tracking-wider text-[#233216] uppercase disabled:opacity-60"
+              >
+                {bookingLoading ? (
+                  <span className="inline-flex items-center gap-2">
+                    <Loader2 size={12} className="animate-spin" /> Booking...
+                  </span>
+                ) : (
+                  "Confirm Event Booking"
+                )}
+              </button>
+            </motion.div>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
 
       <BottomNav />
     </div>

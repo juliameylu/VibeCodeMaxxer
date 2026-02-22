@@ -5,6 +5,7 @@ import { PageHeader } from "../components/PageHeader";
 import { useState, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { supabase } from "/utils/supabase/client";
+import { getBackendSystemState, listBackendEndpoints, resetSupabaseAndSeed } from "../../lib/api/backend";
 
 const STATUS_KEY = "polyjarvis_status";
 const AVATAR_KEY = "polyjarvis_avatar";
@@ -57,6 +58,11 @@ export function Profile() {
     try { return JSON.parse(localStorage.getItem(TRAIN_KEY + "_dislikes") || "[]"); } catch { return []; }
   });
   const [showTrainer, setShowTrainer] = useState(false);
+  const [backendSnapshot, setBackendSnapshot] = useState<any>(null);
+  const [backendEndpoints, setBackendEndpoints] = useState<Array<{ method: string; path: string }>>([]);
+  const [backendLoading, setBackendLoading] = useState(false);
+  const [backendError, setBackendError] = useState("");
+  const [backendResetting, setBackendResetting] = useState(false);
 
   const remainingPrompts = trainingPrompts.filter(p => !likes.includes(p.id) && !dislikes.includes(p.id));
   const currentPrompt = remainingPrompts[0];
@@ -100,6 +106,47 @@ export function Profile() {
     const avatar = localStorage.getItem(AVATAR_KEY);
     if (avatar) setAvatarUrl(avatar);
   }, []);
+
+  const refreshBackendSnapshot = async () => {
+    setBackendLoading(true);
+    setBackendError("");
+    try {
+      const [snapshot, endpointPayload] = await Promise.all([
+        getBackendSystemState(),
+        listBackendEndpoints(),
+      ]);
+      setBackendSnapshot(snapshot);
+      setBackendEndpoints(Array.isArray(endpointPayload?.endpoints) ? endpointPayload.endpoints : []);
+    } catch (error) {
+      setBackendEndpoints([]);
+      setBackendError(error instanceof Error ? error.message : "Could not load backend state.");
+    } finally {
+      setBackendLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    refreshBackendSnapshot();
+  }, []);
+
+  const handleResetSupabase = async () => {
+    const confirmed = window.confirm("Reset Supabase app tables and reseed dummy users?");
+    if (!confirmed) return;
+
+    setBackendResetting(true);
+    setBackendError("");
+    try {
+      const result = await resetSupabaseAndSeed({ seed: true });
+      const clearedCount = Array.isArray(result?.cleared_tables) ? result.cleared_tables.length : 0;
+      toast.success(`Supabase reset complete (${clearedCount} tables cleared).`);
+      await refreshBackendSnapshot();
+    } catch (error) {
+      setBackendError(error instanceof Error ? error.message : "Could not reset Supabase.");
+      toast.error("Supabase reset failed.");
+    } finally {
+      setBackendResetting(false);
+    }
+  };
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();
@@ -343,6 +390,83 @@ export function Profile() {
                 </button>
               </div>
             )}
+          </div>
+        </div>
+
+        <div className="pt-3">
+          <div className="rounded-xl border border-white/15 bg-white/8 p-4 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <p className="text-[10px] font-black tracking-widest text-[#F2E8CF] uppercase">Backend Snapshot</p>
+                <p className="text-[10px] text-white/35">Live counts from backend routes + stores</p>
+              </div>
+              <button
+                onClick={refreshBackendSnapshot}
+                disabled={backendLoading}
+                className="px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider bg-white/10 border border-white/15 text-white/70 disabled:opacity-50"
+              >
+                {backendLoading ? "Loading..." : "Refresh"}
+              </button>
+            </div>
+
+            {backendError ? <p className="text-xs text-red-300">{backendError}</p> : null}
+
+            {backendSnapshot?.counts ? (
+              <div className="grid grid-cols-3 gap-2 text-center">
+                <div className="rounded-lg bg-white/8 border border-white/10 p-2">
+                  <p className="text-sm font-black text-[#F2E8CF]">{backendSnapshot.counts.users || 0}</p>
+                  <p className="text-[9px] text-white/35 uppercase font-black tracking-wider">Users</p>
+                </div>
+                <div className="rounded-lg bg-white/8 border border-white/10 p-2">
+                  <p className="text-sm font-black text-[#F2E8CF]">{backendSnapshot.counts.availabilities || 0}</p>
+                  <p className="text-[9px] text-white/35 uppercase font-black tracking-wider">Windows</p>
+                </div>
+                <div className="rounded-lg bg-white/8 border border-white/10 p-2">
+                  <p className="text-sm font-black text-[#F2E8CF]">{backendSnapshot.counts.reservations || 0}</p>
+                  <p className="text-[9px] text-white/35 uppercase font-black tracking-wider">Reservations</p>
+                </div>
+              </div>
+            ) : null}
+
+            {Array.isArray(backendSnapshot?.users) && backendSnapshot.users.length > 0 ? (
+              <div className="space-y-1">
+                {backendSnapshot.users.slice(0, 3).map((row: any) => (
+                  <div key={row.user_id} className="rounded-lg border border-white/10 bg-black/20 px-2 py-1.5 text-[10px] text-white/65">
+                    {row.name} · {row.preference_preview?.price_max || "$$$"} · {row.windows_count || 0} windows
+                  </div>
+                ))}
+              </div>
+            ) : null}
+
+            {backendEndpoints.length > 0 ? (
+              <div className="space-y-1">
+                <p className="text-[10px] font-black tracking-widest text-white/45 uppercase">
+                  API Endpoints ({backendEndpoints.length})
+                </p>
+                {backendEndpoints.slice(0, 14).map((endpoint) => (
+                  <div
+                    key={`${endpoint.method}:${endpoint.path}`}
+                    className="rounded-lg border border-white/10 bg-black/20 px-2 py-1.5 text-[10px] text-white/65"
+                  >
+                    <span className="text-[#F2E8CF] font-black mr-2">{endpoint.method}</span>
+                    <span>{endpoint.path}</span>
+                  </div>
+                ))}
+                {backendEndpoints.length > 14 ? (
+                  <p className="text-[10px] text-white/35">
+                    +{backendEndpoints.length - 14} more endpoints (refresh to reload)
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+
+            <button
+              onClick={handleResetSupabase}
+              disabled={backendResetting}
+              className="w-full rounded-xl border border-red-300/35 bg-red-500/10 px-3 py-2 text-[10px] font-black uppercase tracking-wider text-red-200 disabled:opacity-50"
+            >
+              {backendResetting ? "Resetting..." : "Reset Supabase + Reseed Dummy Users"}
+            </button>
           </div>
         </div>
 

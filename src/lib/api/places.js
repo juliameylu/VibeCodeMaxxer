@@ -72,8 +72,6 @@ export async function searchPlaces(params = {}) {
     };
   }
 
-  // TODO: wire this endpoint to a server-side Yelp proxy (e.g. /api/places or Supabase Edge Function).
-  // Never call Yelp directly from the client with secret keys.
   const search = new URLSearchParams({
     category: params.category || "restaurant",
     price: params.price || "all",
