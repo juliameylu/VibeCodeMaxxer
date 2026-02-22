@@ -34,7 +34,8 @@ function createGuestCredentials() {
   return {
     email: `guest-${suffix}@guest.local`,
     password: `guest-${Math.random().toString(36).slice(2, 12)}`,
-    displayName: "Guest"
+    displayName: "Guest",
+    phone: ""
   };
 }
 
@@ -67,7 +68,8 @@ export function AuthProvider({ children }) {
             body: {
               email: credentials.email,
               password: credentials.password,
-              displayName: credentials.displayName || "Guest"
+              displayName: credentials.displayName || "Guest",
+              phone: credentials.phone || ""
             },
             withAuth: false
           });
@@ -138,10 +140,10 @@ export function AuthProvider({ children }) {
       badges,
       isAuthenticated: Boolean(user),
       isOnboardingComplete: Boolean(user?.onboarding_complete),
-      async signUp({ email, password, displayName }) {
+      async signUp({ email, password, displayName, phone }) {
         const data = await apiFetch("/api/auth/signup", {
           method: "POST",
-          body: { email, password, displayName },
+          body: { email, password, displayName, phone },
           withAuth: false
         });
 
@@ -185,7 +187,8 @@ export function AuthProvider({ children }) {
             body: {
               email: credentials.email,
               password: credentials.password,
-              displayName: credentials.displayName || "Guest"
+              displayName: credentials.displayName || "Guest",
+              phone: credentials.phone || ""
             },
             withAuth: false
           });

@@ -3,6 +3,11 @@ import { randomUUID } from "crypto";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, GetCommand, PutCommand } from "@aws-sdk/lib-dynamodb";
 import { createRemoteJWKSet, jwtVerify } from "jose";
+import twilio from "twilio";
+import dotenv from "dotenv";
+
+dotenv.config({ path: ".env" });
+dotenv.config({ path: ".env.local", override: true });
 
 let openai = null;
 const AWS_REGION = process.env.AWS_REGION || "";
@@ -16,6 +21,18 @@ const COGNITO_APP_CLIENT_ID = process.env.COGNITO_APP_CLIENT_ID || "";
 const COGNITO_ISSUER = COGNITO_USER_POOL_ID && AWS_REGION
   ? `https://cognito-idp.${AWS_REGION}.amazonaws.com/${COGNITO_USER_POOL_ID}`
   : "";
+const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || "";
+const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || "";
+const TWILIO_PHONE_NUMBER = process.env.TWILIO_PHONE_NUMBER || "";
+const DEMO_TARGET_NUMBER = process.env.DEMO_TARGET_NUMBER || "";
+const DEMO_SMS_TARGET_NUMBER = process.env.DEMO_SMS_TARGET_NUMBER || "";
+const TWILIO_PUBLIC_BASE_URL = process.env.TWILIO_PUBLIC_BASE_URL || process.env.PUBLIC_BASE_URL || "";
+const JARVIS_CALL_TONE = process.env.JARVIS_CALL_TONE || "casual";
+const DEMO_GUEST_PHONE_NUMBER = process.env.DEMO_GUEST_PHONE_NUMBER || "";
+const DEMO_USER_PHONE_MAP_JSON = process.env.DEMO_USER_PHONE_MAP_JSON || "{}";
+const RESERVATION_CALL_MAX_SECONDS = 120;
+const RESERVATION_CALL_MAX_RETRIES = 1;
+const SMS_NOTIFICATIONS_ENABLED = false;
 const USE_AWS_STATE = Boolean(AWS_REGION && AWS_DYNAMO_TABLE);
 const dynamo = USE_AWS_STATE
   ? DynamoDBDocumentClient.from(new DynamoDBClient({ region: AWS_REGION }))
@@ -24,6 +41,7 @@ const snapshotKey = { pk: AWS_STATE_PK, sk: AWS_STATE_SK };
 const cognitoJwks = COGNITO_ISSUER ? createRemoteJWKSet(new URL(`${COGNITO_ISSUER}/.well-known/jwks.json`)) : null;
 let storeDirty = false;
 let snapshotWriteInFlight = null;
+let twilioClient = null;
 
 const NOW = () => new Date();
 
@@ -42,7 +60,9 @@ const store = {
   jamMembers: [],
   studyTasks: [],
   aiActionLogs: [],
+  messageDeliveries: [],
   pendingActions: new Map(),
+  reservationCallJobs: new Map(),
   eventsCatalog: [
     {
       id: "event-brew-quiet",
@@ -133,7 +153,9 @@ function serializeStore() {
     sessions: Object.fromEntries(store.sessions.entries()),
     preferences: Object.fromEntries(store.preferences.entries()),
     connections: Object.fromEntries(store.connections.entries()),
-    pendingActions: Object.fromEntries(store.pendingActions.entries())
+    pendingActions: Object.fromEntries(store.pendingActions.entries()),
+    reservationCallJobs: Object.fromEntries(store.reservationCallJobs.entries()),
+    messageDeliveries: store.messageDeliveries
   };
 }
 
@@ -144,6 +166,8 @@ function hydrateStore(snapshot) {
   store.preferences = new Map(Object.entries(snapshot.preferences || {}));
   store.connections = new Map(Object.entries(snapshot.connections || {}));
   store.pendingActions = new Map(Object.entries(snapshot.pendingActions || {}));
+  store.reservationCallJobs = new Map(Object.entries(snapshot.reservationCallJobs || {}));
+  store.messageDeliveries = snapshot.messageDeliveries || [];
   store.userEventStates = snapshot.userEventStates || [];
   store.groups = snapshot.groups || [];
   store.groupMembers = snapshot.groupMembers || [];
@@ -200,6 +224,75 @@ async function flushStoreSnapshot(force = false) {
 
 function normalizeEmail(value) {
   return String(value || "").trim().toLowerCase();
+}
+
+function normalizePhone(value) {
+  const digits = String(value || "").replace(/[^\d]/g, "");
+  if (!digits) return "";
+  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+  if (digits.length === 10) return `+1${digits}`;
+  if (String(value || "").trim().startsWith("+")) return `+${digits}`;
+  return `+${digits}`;
+}
+
+function isLikelyE164(value) {
+  return /^\+\d{10,15}$/.test(String(value || ""));
+}
+
+function canUseTwilio() {
+  return Boolean(TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN && TWILIO_PHONE_NUMBER && DEMO_TARGET_NUMBER && TWILIO_PUBLIC_BASE_URL);
+}
+
+function missingTwilioConfigKeys() {
+  const required = {
+    TWILIO_ACCOUNT_SID,
+    TWILIO_AUTH_TOKEN,
+    TWILIO_PHONE_NUMBER,
+    DEMO_TARGET_NUMBER,
+    TWILIO_PUBLIC_BASE_URL
+  };
+  return Object.entries(required)
+    .filter(([, value]) => !String(value || "").trim())
+    .map(([key]) => key);
+}
+
+function twilioWebhookUrl(path) {
+  const base = TWILIO_PUBLIC_BASE_URL.replace(/\/$/, "");
+  return `${base}${path}`;
+}
+
+function getTwilioClient() {
+  if (!canUseTwilio()) return null;
+  if (!twilioClient) {
+    twilioClient = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
+  }
+  return twilioClient;
+}
+
+function parseDemoUserPhoneMap() {
+  try {
+    const parsed = JSON.parse(DEMO_USER_PHONE_MAP_JSON || "{}");
+    if (!parsed || typeof parsed !== "object") return {};
+    return parsed;
+  } catch {
+    return {};
+  }
+}
+
+function resolveSignupPhone(email, submittedPhone) {
+  const normalizedSubmitted = normalizePhone(submittedPhone);
+  if (isLikelyE164(normalizedSubmitted)) return normalizedSubmitted;
+
+  const phoneMap = parseDemoUserPhoneMap();
+  const mapped = normalizePhone(phoneMap[normalizeEmail(email)] || "");
+  if (isLikelyE164(mapped)) return mapped;
+
+  if (normalizeEmail(email).endsWith("@guest.local")) {
+    const guestFallback = normalizePhone(DEMO_GUEST_PHONE_NUMBER);
+    if (isLikelyE164(guestFallback)) return guestFallback;
+    return "+15550000000";
+  }
+  return "";
 }
 
 function requireSession(req, res) {
@@ -396,6 +489,319 @@ async function generateAssistantReply(payload) {
   }
 }
 
+async function generateReservationCallScript({ restaurantName, partySize, reservationTime, specialRequest }) {
+  const fallback = [
+    `Hi, this is an AI assistant helping someone book a table at ${restaurantName}.`,
+    `Could you check if you have room for ${partySize} people at ${reservationTime}?`,
+    specialRequest ? `Also, quick note: ${specialRequest}.` : null
+  ].filter(Boolean).join(" ");
+
+  if (!process.env.OPENAI_API_KEY) return fallback;
+  try {
+    if (!openai) {
+      openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    }
+    const response = await openai.responses.create({
+      model: "gpt-4.1-mini",
+      input: [
+        {
+          role: "system",
+          content: `Write a ${JARVIS_CALL_TONE} but polite phone script for a reservation request. Plain text only. Keep under 90 words.`
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            restaurantName,
+            partySize,
+            reservationTime,
+            specialRequest,
+            requirements: [
+              "State this is an AI assistant calling on behalf of a customer.",
+              "Ask politely for reservation confirmation."
+            ]
+          })
+        }
+      ]
+    });
+    const text = String(response.output_text || "").trim();
+    return text || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+async function sendGroupReservationSms({ userId, groupId, restaurantName, partySize, reservationTime }) {
+  if (!SMS_NOTIFICATIONS_ENABLED) {
+    return {
+      sent: 0,
+      failed: 0,
+      recipients: [],
+      errors: [
+        "SMS demo paused: we were close to shipping group confirmation texts, but approval timing did not complete before the demo window."
+      ]
+    };
+  }
+
+  const client = getTwilioClient();
+  const from = normalizePhone(TWILIO_PHONE_NUMBER);
+  if (!client || !isLikelyE164(from)) {
+    return { sent: 0, failed: 0, recipients: [], errors: ["Twilio SMS not configured"] };
+  }
+
+  const demoSmsOverride = normalizePhone(DEMO_SMS_TARGET_NUMBER);
+  if (isLikelyE164(demoSmsOverride)) {
+    const body = `Reservation confirmed at ${restaurantName} for ${partySize} at ${reservationTime}.`;
+    try {
+      const sms = await client.messages.create({
+        to: demoSmsOverride,
+        from,
+        body
+      });
+      store.messageDeliveries.push({
+        id: randomUUID(),
+        user_id: userId,
+        channel: "sms",
+        template: "reservation_confirmed_demo_override",
+        provider_ref: sms.sid,
+        status: "sent",
+        sent_at: NOW().toISOString(),
+        meta: {
+          group_id: groupId,
+          to: demoSmsOverride,
+          override: true
+        }
+      });
+      markStoreDirty();
+      return {
+        sent: 1,
+        failed: 0,
+        recipients: [{ phone: demoSmsOverride, user_id: null, display_name: "Demo SMS Target" }],
+        errors: []
+      };
+    } catch (error) {
+      store.messageDeliveries.push({
+        id: randomUUID(),
+        user_id: userId,
+        channel: "sms",
+        template: "reservation_confirmed_demo_override",
+        provider_ref: "",
+        status: "failed",
+        sent_at: NOW().toISOString(),
+        meta: {
+          group_id: groupId,
+          to: demoSmsOverride,
+          override: true,
+          error: error instanceof Error ? error.message : "send failed"
+        }
+      });
+      markStoreDirty();
+      return {
+        sent: 0,
+        failed: 1,
+        recipients: [{ phone: demoSmsOverride, user_id: null, display_name: "Demo SMS Target" }],
+        errors: ["Failed SMS to demo override number"]
+      };
+    }
+  }
+
+  if (groupId === "creator-only") {
+    const owner = store.users.get(userId);
+    const ownerPhone = normalizePhone(owner?.phone || "");
+    if (!isLikelyE164(ownerPhone)) {
+      return { sent: 0, failed: 0, recipients: [], errors: ["Creator phone is missing or invalid"] };
+    }
+    const body = `Reservation confirmed at ${restaurantName} for ${partySize} at ${reservationTime}.`;
+    try {
+      const sms = await client.messages.create({
+        to: ownerPhone,
+        from,
+        body
+      });
+      store.messageDeliveries.push({
+        id: randomUUID(),
+        user_id: userId,
+        channel: "sms",
+        template: "reservation_confirmed_creator_notify",
+        provider_ref: sms.sid,
+        status: "sent",
+        sent_at: NOW().toISOString(),
+        meta: {
+          group_id: "creator-only",
+          to: ownerPhone
+        }
+      });
+      markStoreDirty();
+      return {
+        sent: 1,
+        failed: 0,
+        recipients: [{ phone: ownerPhone, user_id: userId, display_name: owner?.display_name || "Creator" }],
+        errors: []
+      };
+    } catch (error) {
+      store.messageDeliveries.push({
+        id: randomUUID(),
+        user_id: userId,
+        channel: "sms",
+        template: "reservation_confirmed_creator_notify",
+        provider_ref: "",
+        status: "failed",
+        sent_at: NOW().toISOString(),
+        meta: {
+          group_id: "creator-only",
+          to: ownerPhone,
+          error: error instanceof Error ? error.message : "send failed"
+        }
+      });
+      markStoreDirty();
+      return {
+        sent: 0,
+        failed: 1,
+        recipients: [{ phone: ownerPhone, user_id: userId, display_name: owner?.display_name || "Creator" }],
+        errors: ["Failed SMS to creator"]
+      };
+    }
+  }
+
+  const group = store.groups.find((item) => item.id === groupId && item.owner_user_id === userId);
+  if (!group) {
+    return { sent: 0, failed: 0, recipients: [], errors: ["Selected group not found"] };
+  }
+
+  const members = store.groupMembers.filter((item) => item.group_id === group.id);
+  const dedupe = new Set();
+  const recipients = [];
+  for (const member of members) {
+    let phone = "";
+    if (member.user_id) {
+      const user = store.users.get(member.user_id);
+      phone = normalizePhone(user?.phone || "");
+    } else {
+      phone = normalizePhone(member.phone || "");
+    }
+    if (!isLikelyE164(phone) || dedupe.has(phone)) continue;
+    dedupe.add(phone);
+    recipients.push({
+      phone,
+      member_id: member.id,
+      user_id: member.user_id || null,
+      display_name: member.display_name || "Member"
+    });
+  }
+
+  if (recipients.length === 0) {
+    const owner = store.users.get(userId);
+    const ownerPhone = normalizePhone(owner?.phone || "");
+    if (isLikelyE164(ownerPhone) && !dedupe.has(ownerPhone)) {
+      recipients.push({
+        phone: ownerPhone,
+        member_id: "owner-fallback",
+        user_id: userId,
+        display_name: owner?.display_name || "Owner"
+      });
+      dedupe.add(ownerPhone);
+    }
+  }
+
+  if (recipients.length === 0) {
+    return { sent: 0, failed: 0, recipients: [], errors: ["No valid recipient phone numbers in selected group or owner profile"] };
+  }
+
+  const body = `Reservation confirmed at ${restaurantName} for ${partySize} at ${reservationTime}.`;
+  let sent = 0;
+  let failed = 0;
+  const errors = [];
+
+  for (const recipient of recipients) {
+    try {
+      const sms = await client.messages.create({
+        to: recipient.phone,
+        from,
+        body
+      });
+      sent += 1;
+      store.messageDeliveries.push({
+        id: randomUUID(),
+        user_id: userId,
+        channel: "sms",
+        template: "reservation_confirmed_group_notify",
+        provider_ref: sms.sid,
+        status: "sent",
+        sent_at: NOW().toISOString(),
+        meta: {
+          group_id: groupId,
+          to: recipient.phone
+        }
+      });
+    } catch (error) {
+      failed += 1;
+      errors.push(`Failed SMS to ${recipient.phone}`);
+      store.messageDeliveries.push({
+        id: randomUUID(),
+        user_id: userId,
+        channel: "sms",
+        template: "reservation_confirmed_group_notify",
+        provider_ref: "",
+        status: "failed",
+        sent_at: NOW().toISOString(),
+        meta: {
+          group_id: groupId,
+          to: recipient.phone,
+          error: error instanceof Error ? error.message : "send failed"
+        }
+      });
+    }
+  }
+  markStoreDirty();
+  return { sent, failed, recipients, errors };
+}
+
+async function placeReservationCallAttempt(jobId, attemptIndex) {
+  const client = getTwilioClient();
+  if (!client) {
+    throw new Error("Twilio is not configured. Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER, DEMO_TARGET_NUMBER, and TWILIO_PUBLIC_BASE_URL.");
+  }
+  const job = store.reservationCallJobs.get(jobId);
+  if (!job) {
+    throw new Error("Call job not found");
+  }
+
+  const call = await client.calls.create({
+    to: job.target_number,
+    from: normalizePhone(TWILIO_PHONE_NUMBER),
+    url: twilioWebhookUrl(`/api/twilio/voice/reservation-twiml?jobId=${encodeURIComponent(jobId)}`),
+    statusCallback: twilioWebhookUrl(`/api/twilio/voice/status?jobId=${encodeURIComponent(jobId)}&attempt=${attemptIndex}`),
+    statusCallbackMethod: "POST",
+    statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
+    timeout: 20,
+    timeLimit: RESERVATION_CALL_MAX_SECONDS
+  });
+
+  const attemptRecord = {
+    attempt_index: attemptIndex,
+    call_sid: call.sid,
+    status: call.status || "queued",
+    created_at: NOW().toISOString(),
+    updated_at: NOW().toISOString()
+  };
+
+  const attempts = Array.isArray(job.attempts) ? [...job.attempts] : [];
+  const existingIndex = attempts.findIndex((item) => item.attempt_index === attemptIndex);
+  if (existingIndex >= 0) {
+    attempts[existingIndex] = attemptRecord;
+  } else {
+    attempts.push(attemptRecord);
+  }
+
+  job.attempts = attempts;
+  job.current_attempt = attemptIndex;
+  job.call_sid = call.sid;
+  job.status = attemptIndex > 0 ? "retrying" : "calling";
+  job.updated_at = NOW().toISOString();
+  store.reservationCallJobs.set(jobId, job);
+  markStoreDirty();
+  return call;
+}
+
 export function registerPlannerApi(app) {
   loadStoreSnapshot().catch(() => {});
   setInterval(() => {
@@ -469,9 +875,14 @@ export function registerPlannerApi(app) {
     const email = normalizeEmail(req.body?.email);
     const password = String(req.body?.password || "");
     const displayName = String(req.body?.displayName || "").trim() || "SLO Student";
+    const phone = resolveSignupPhone(email, req.body?.phone);
 
     if (!email || !password) {
       res.status(400).json({ error: "email and password are required" });
+      return;
+    }
+    if (!phone) {
+      res.status(400).json({ error: "phone is required (E.164 format like +15551234567)" });
       return;
     }
 
@@ -487,6 +898,7 @@ export function registerPlannerApi(app) {
       email,
       display_name: displayName,
       cal_poly_email: email.endsWith("@calpoly.edu") ? email : "",
+      phone,
       onboarding_complete: false,
       created_at: NOW().toISOString(),
       password
@@ -506,6 +918,7 @@ export function registerPlannerApi(app) {
         id: user.id,
         email: user.email,
         display_name: user.display_name,
+        phone: user.phone,
         onboarding_complete: user.onboarding_complete
       }
     });
@@ -534,6 +947,7 @@ export function registerPlannerApi(app) {
         id: user.id,
         email: user.email,
         display_name: user.display_name,
+        phone: user.phone || "",
         onboarding_complete: user.onboarding_complete
       }
     });
@@ -560,6 +974,7 @@ export function registerPlannerApi(app) {
         id: user.id,
         email: user.email,
         display_name: user.display_name,
+        phone: user.phone || "",
         onboarding_complete: Boolean(user.onboarding_complete)
       },
       preferences: getOrInitPreferences(user.id),
@@ -829,6 +1244,15 @@ export function registerPlannerApi(app) {
       created_at: NOW().toISOString()
     };
     store.groups.push(group);
+    store.groupMembers.push({
+      id: randomUUID(),
+      group_id: group.id,
+      member_type: "user",
+      user_id: auth.userId,
+      phone: auth.user.phone || null,
+      email: auth.user.email || null,
+      display_name: auth.user.display_name || "You"
+    });
     markStoreDirty();
 
     res.json({ group });
@@ -840,9 +1264,39 @@ export function registerPlannerApi(app) {
 
     const groups = store.groups
       .filter((group) => group.owner_user_id === auth.userId)
-      .map((group) => ({ ...group, members: store.groupMembers.filter((member) => member.group_id === group.id) }));
+      .map((group) => ({
+        ...group,
+        members: store.groupMembers
+          .filter((member) => member.group_id === group.id)
+          .map((member) => {
+            if (member.user_id) {
+              const linked = store.users.get(member.user_id);
+              return {
+                ...member,
+                phone: linked?.phone || member.phone || null,
+                email: linked?.email || member.email || null
+              };
+            }
+            return member;
+          })
+      }));
 
     res.json({ groups });
+  });
+
+  app.get("/api/users/directory", (req, res) => {
+    const auth = requireSession(req, res);
+    if (!auth) return;
+
+    const users = [...store.users.values()]
+      .filter((user) => user.id !== auth.userId)
+      .map((user) => ({
+        id: user.id,
+        display_name: user.display_name || "User",
+        email: user.email || "",
+        phone: user.phone || ""
+      }));
+    res.json({ users });
   });
 
   app.post("/api/groups/:groupId/members", (req, res) => {
@@ -855,14 +1309,21 @@ export function registerPlannerApi(app) {
       return;
     }
 
+    const requestedUserId = String(req.body?.user_id || "").trim();
+    const linkedUser = requestedUserId ? store.users.get(requestedUserId) : null;
+    if (requestedUserId && !linkedUser) {
+      res.status(404).json({ error: "Selected user not found" });
+      return;
+    }
+
     const member = {
       id: randomUUID(),
       group_id: group.id,
-      member_type: req.body?.user_id ? "user" : "external_contact",
-      user_id: req.body?.user_id || null,
-      phone: req.body?.phone || null,
-      email: req.body?.email || null,
-      display_name: req.body?.display_name || "New member"
+      member_type: linkedUser ? "user" : "external_contact",
+      user_id: linkedUser?.id || null,
+      phone: linkedUser?.phone || req.body?.phone || null,
+      email: linkedUser?.email || req.body?.email || null,
+      display_name: linkedUser?.display_name || req.body?.display_name || "New member"
     };
 
     store.groupMembers.push(member);
@@ -1164,6 +1625,282 @@ export function registerPlannerApi(app) {
     task.done = !task.done;
     markStoreDirty();
     res.json({ task, study_load: computeStudyLoad(auth.userId) });
+  });
+
+  app.post("/api/agent/call/start", async (req, res) => {
+    const auth = requireSession(req, res);
+    if (!auth) return;
+
+    if (!canUseTwilio()) {
+      const missing = missingTwilioConfigKeys();
+      res.status(500).json({
+        error: "Twilio call feature is not configured. Please set Twilio credentials and TWILIO_PUBLIC_BASE_URL.",
+        missing
+      });
+      return;
+    }
+
+    const restaurantName = String(req.body?.restaurant_name || "Restaurant").trim();
+    const reservationTime = String(req.body?.reservation_time || "").trim();
+    const specialRequest = String(req.body?.special_request || "").trim();
+    const partySize = Math.max(1, Math.min(20, Number(req.body?.party_size || 2)));
+    const selectedGroupId = String(req.body?.group_id || "").trim();
+    const requestedTarget = normalizePhone(req.body?.target_number || DEMO_TARGET_NUMBER);
+    const allowedTarget = normalizePhone(DEMO_TARGET_NUMBER);
+
+    if (!reservationTime) {
+      res.status(400).json({ error: "reservation_time is required" });
+      return;
+    }
+    if (!selectedGroupId) {
+      res.status(400).json({ error: "group_id is required to notify one selected group on confirmation" });
+      return;
+    }
+    const selectedGroup = store.groups.find((group) => group.id === selectedGroupId && group.owner_user_id === auth.userId);
+    if (!selectedGroup && selectedGroupId !== "creator-only") {
+      res.status(404).json({ error: "Selected group not found" });
+      return;
+    }
+    if (!allowedTarget || requestedTarget !== allowedTarget) {
+      res.status(400).json({ error: "Only the configured DEMO_TARGET_NUMBER can be called in demo mode." });
+      return;
+    }
+
+    const voiceScript = await generateReservationCallScript({
+      restaurantName,
+      partySize,
+      reservationTime,
+      specialRequest
+    });
+
+    const jobId = randomUUID();
+    const nowIso = NOW().toISOString();
+    const job = {
+      job_id: jobId,
+      user_id: auth.userId,
+      restaurant_name: restaurantName,
+      reservation_time: reservationTime,
+      party_size: partySize,
+      special_request: specialRequest,
+      group_id: selectedGroupId,
+      target_number: allowedTarget,
+      caller_number: normalizePhone(TWILIO_PHONE_NUMBER),
+      status: "queued",
+      max_duration_seconds: RESERVATION_CALL_MAX_SECONDS,
+      max_retries: RESERVATION_CALL_MAX_RETRIES,
+      voice_script: voiceScript,
+      attempts: [],
+      retry_used: 0,
+      call_sid: null,
+      decision_digit: "",
+      reservation_decision: "pending",
+      sms_notifications: {
+        state: "pending",
+        sent: 0,
+        failed: 0,
+        recipients: 0,
+        errors: []
+      },
+      last_error: "",
+      created_at: nowIso,
+      updated_at: nowIso
+    };
+    store.reservationCallJobs.set(jobId, job);
+    markStoreDirty();
+
+    try {
+      await placeReservationCallAttempt(jobId, 0);
+      const next = store.reservationCallJobs.get(jobId);
+      res.status(201).json({ call_job: next });
+    } catch (error) {
+      const failed = store.reservationCallJobs.get(jobId);
+      failed.status = "failed";
+      failed.last_error = error instanceof Error ? error.message : "Could not place call";
+      failed.updated_at = NOW().toISOString();
+      store.reservationCallJobs.set(jobId, failed);
+      markStoreDirty();
+      res.status(502).json({ error: failed.last_error });
+    }
+  });
+
+  app.get("/api/agent/call/:jobId", (req, res) => {
+    const auth = requireSession(req, res);
+    if (!auth) return;
+    const job = store.reservationCallJobs.get(req.params.jobId);
+    if (!job || job.user_id !== auth.userId) {
+      res.status(404).json({ error: "Call job not found" });
+      return;
+    }
+    res.json({ call_job: job });
+  });
+
+  app.post("/api/twilio/voice/reservation-twiml", (req, res) => {
+    const jobId = String(req.query?.jobId || "");
+    const job = store.reservationCallJobs.get(jobId);
+    if (!job) {
+      res.status(404).type("text/xml").send("<Response><Say>Call request not found.</Say></Response>");
+      return;
+    }
+
+    const twiml = new twilio.twiml.VoiceResponse();
+    twiml.say({ voice: "alice", language: "en-US" }, job.voice_script || "Hello. This is a reservation request.");
+    twiml.pause({ length: 1 });
+    const gather = twiml.gather({
+      input: "dtmf",
+      numDigits: 1,
+      action: twilioWebhookUrl(`/api/twilio/voice/input?jobId=${encodeURIComponent(jobId)}`),
+      method: "POST",
+      timeout: 7,
+      actionOnEmptyResult: true
+    });
+    gather.say(
+      { voice: "alice", language: "en-US" },
+      "To confirm this reservation request, press 1. If this time does not work, press 2."
+    );
+    twiml.say({ voice: "alice", language: "en-US" }, "No selection received. This request will be marked as declined due to timeout.");
+    twiml.hangup();
+
+    job.status = "in-progress";
+    job.updated_at = NOW().toISOString();
+    store.reservationCallJobs.set(jobId, job);
+    markStoreDirty();
+
+    res.type("text/xml").send(twiml.toString());
+  });
+
+  app.post("/api/twilio/voice/input", async (req, res) => {
+    const jobId = String(req.query?.jobId || "");
+    const digit = String(req.body?.Digits || "").trim();
+    const job = store.reservationCallJobs.get(jobId);
+    if (!job) {
+      res.status(404).type("text/xml").send("<Response><Say>Call request not found.</Say></Response>");
+      return;
+    }
+
+    const twiml = new twilio.twiml.VoiceResponse();
+    job.decision_digit = digit;
+
+    if (digit === "1") {
+      job.reservation_decision = "confirmed";
+      job.status = "reservation-confirmed";
+      twiml.say({ voice: "alice", language: "en-US" }, "Thank you. Reservation confirmed.");
+      const smsResult = await sendGroupReservationSms({
+        userId: job.user_id,
+        groupId: job.group_id,
+        restaurantName: job.restaurant_name,
+        partySize: job.party_size,
+        reservationTime: job.reservation_time
+      });
+      const smsState = smsResult.errors.length > 0 && smsResult.sent === 0 && smsResult.recipients.length === 0
+        ? "paused"
+        : smsResult.failed > 0
+          ? "partial"
+          : "sent";
+      job.sms_notifications = {
+        state: smsState,
+        sent: smsResult.sent,
+        failed: smsResult.failed,
+        recipients: smsResult.recipients.length,
+        errors: smsResult.errors
+      };
+    } else if (digit === "2") {
+      job.reservation_decision = "declined";
+      job.status = "reservation-declined";
+      twiml.say({ voice: "alice", language: "en-US" }, "Thank you. We have marked this request as declined.");
+    } else if (!digit) {
+      job.decision_digit = "2";
+      job.reservation_decision = "declined-timeout";
+      job.status = "reservation-timeout";
+      twiml.say({ voice: "alice", language: "en-US" }, "No selection received. This request is marked as declined due to timeout.");
+    } else {
+      job.reservation_decision = "no-response";
+      job.status = "awaiting-followup";
+      twiml.say({ voice: "alice", language: "en-US" }, "No valid selection was received.");
+    }
+
+    job.updated_at = NOW().toISOString();
+    store.reservationCallJobs.set(jobId, job);
+    markStoreDirty();
+
+    twiml.say({ voice: "alice", language: "en-US" }, "Goodbye.");
+    twiml.hangup();
+    res.type("text/xml").send(twiml.toString());
+  });
+
+  app.post("/api/twilio/voice/status", async (req, res) => {
+    const jobId = String(req.query?.jobId || "");
+    const attemptIndex = Number(req.query?.attempt || 0);
+    const callStatus = String(req.body?.CallStatus || "").toLowerCase();
+    const callSid = String(req.body?.CallSid || "");
+    const job = store.reservationCallJobs.get(jobId);
+
+    if (!job) {
+      res.status(200).json({ ok: true });
+      return;
+    }
+
+    const attempts = Array.isArray(job.attempts) ? [...job.attempts] : [];
+    const idx = attempts.findIndex((item) => item.attempt_index === attemptIndex || item.call_sid === callSid);
+    if (idx >= 0) {
+      attempts[idx] = {
+        ...attempts[idx],
+        status: callStatus || attempts[idx].status,
+        call_sid: callSid || attempts[idx].call_sid,
+        updated_at: NOW().toISOString()
+      };
+    }
+    job.attempts = attempts;
+
+    const retryableStatuses = new Set(["busy", "failed", "no-answer", "canceled"]);
+    if (retryableStatuses.has(callStatus)) {
+      if ((job.retry_used || 0) < RESERVATION_CALL_MAX_RETRIES) {
+        job.retry_used = (job.retry_used || 0) + 1;
+        job.status = "retrying";
+        job.updated_at = NOW().toISOString();
+        store.reservationCallJobs.set(jobId, job);
+        markStoreDirty();
+        try {
+          await placeReservationCallAttempt(jobId, attemptIndex + 1);
+        } catch (error) {
+          const next = store.reservationCallJobs.get(jobId);
+          next.status = "failed";
+          next.last_error = error instanceof Error ? error.message : "Retry attempt failed";
+          next.updated_at = NOW().toISOString();
+          store.reservationCallJobs.set(jobId, next);
+          markStoreDirty();
+        }
+        res.status(200).json({ ok: true, retried: true });
+        return;
+      }
+      job.status = "failed";
+      job.updated_at = NOW().toISOString();
+      store.reservationCallJobs.set(jobId, job);
+      markStoreDirty();
+      res.status(200).json({ ok: true });
+      return;
+    }
+
+    const decisionLocked = new Set(["reservation-confirmed", "reservation-declined"]);
+    if (decisionLocked.has(job.status)) {
+      job.updated_at = NOW().toISOString();
+      store.reservationCallJobs.set(jobId, job);
+      markStoreDirty();
+      res.status(200).json({ ok: true, decision_locked: true });
+      return;
+    }
+
+    if (callStatus === "completed") {
+      job.status = job.status === "awaiting-followup" ? "awaiting-followup" : "completed";
+    } else if (callStatus === "answered") {
+      job.status = "in-progress";
+    } else if (callStatus === "ringing" || callStatus === "queued" || callStatus === "initiated") {
+      job.status = "calling";
+    }
+
+    job.updated_at = NOW().toISOString();
+    store.reservationCallJobs.set(jobId, job);
+    markStoreDirty();
+    res.status(200).json({ ok: true });
   });
 
   app.post("/api/agent/chat", async (req, res) => {

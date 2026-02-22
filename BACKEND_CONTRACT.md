@@ -327,6 +327,23 @@ Provider webhooks handled server-side only.
 - `status`
 - `sent_at`
 
+### Reservation Confirmation SMS Workflow (Selected Group)
+
+Demo status note:
+- SMS delivery implementation is currently paused for demo readiness because provider approval timing did not complete before the event deadline.
+- The flow is near-complete and intended to be re-enabled after approval by flipping backend SMS gating and keeping the same payload/contract below.
+
+When a reservation call is confirmed by restaurant input (`press 1`), backend must:
+
+- Send SMS notification to exactly one selected group (`group_id`) provided with the reservation call request.
+- Message template:
+  - `Reservation confirmed at {restaurant} for {partySize} at {time}.`
+- Resolve recipient phone numbers from group user members first (signup phone on user profile), with fallback to explicit group member phone if present.
+- Do not require consent checks in MVP demo flow (assume consent already granted).
+- Deduplicate recipient phone numbers.
+- Persist per-recipient delivery results in `message_deliveries`.
+- Keep reservation confirmation state even if SMS delivery partially fails.
+
 ## 12) Realtime Model (Supabase)
 
 Clients subscribe to plan-specific changes.

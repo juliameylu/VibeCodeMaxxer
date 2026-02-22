@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Bot, Circle, Compass, Home, Send, UserRound } from "lucide-react";
 import { Link } from "react-router-dom";
 import { apiFetch } from "../../lib/apiClient";
@@ -21,6 +21,24 @@ export default function AIPage() {
   const [status, setStatus] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
+  const [calling, setCalling] = useState(false);
+  const [callJob, setCallJob] = useState(null);
+  const [groups, setGroups] = useState([]);
+  const [selectedGroupId, setSelectedGroupId] = useState("");
+  const [callForm, setCallForm] = useState({
+    restaurant_name: "Demo Restaurant",
+    reservation_time: "Tonight at 7:00 PM",
+    party_size: 2,
+    special_request: ""
+  });
+
+  function renderDecision(decision) {
+    if (decision === "declined-timeout") return "Declined (timed out)";
+    if (decision === "declined") return "Declined";
+    if (decision === "confirmed") return "Confirmed";
+    if (decision === "no-response") return "No valid response";
+    return "Pending";
+  }
 
   const greetingText = useMemo(() => {
     return "Hey! I'm Jarvis your SLO lifestyle assistant. What are you looking to do today?";
@@ -54,6 +72,26 @@ export default function AIPage() {
     }
   };
 
+  useEffect(() => {
+    let active = true;
+    apiFetch("/api/groups")
+      .then((data) => {
+        if (!active) return;
+        const nextGroups = data.groups || [];
+        setGroups(nextGroups);
+        if (nextGroups[0]?.id) {
+          setSelectedGroupId((prev) => prev || nextGroups[0].id);
+        }
+      })
+      .catch(() => {
+        if (!active) return;
+        setGroups([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const confirmAction = async (actionId) => {
     try {
       const data = await apiFetch(`/api/agent/actions/${actionId}/confirm`, { method: "POST", body: {} });
@@ -61,6 +99,51 @@ export default function AIPage() {
       setActions((prev) => prev.filter((item) => item.action_id !== actionId));
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Could not confirm action.");
+    }
+  };
+
+  useEffect(() => {
+    if (!callJob?.job_id) return undefined;
+    const terminal = new Set(["completed", "failed", "reservation-confirmed", "reservation-declined", "reservation-timeout", "awaiting-followup"]);
+    if (terminal.has(callJob.status)) return undefined;
+
+    const timer = setInterval(async () => {
+      try {
+        const data = await apiFetch(`/api/agent/call/${callJob.job_id}`);
+        setCallJob(data.call_job || null);
+      } catch {
+        // Ignore transient polling errors in the UI.
+      }
+    }, 2500);
+
+    return () => clearInterval(timer);
+  }, [callJob?.job_id, callJob?.status]);
+
+  const startReservationCall = async () => {
+    if (calling) return;
+    if (!selectedGroupId) {
+      setError("Select a group to notify after reservation confirmation.");
+      return;
+    }
+    setCalling(true);
+    setError("");
+    try {
+      const data = await apiFetch("/api/agent/call/start", {
+        method: "POST",
+        body: {
+          restaurant_name: callForm.restaurant_name,
+          reservation_time: callForm.reservation_time,
+          party_size: Number(callForm.party_size || 2),
+          special_request: callForm.special_request,
+          group_id: selectedGroupId
+        }
+      });
+      setCallJob(data.call_job || null);
+      setStatus("Reservation call started.");
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Failed to start reservation call.");
+    } finally {
+      setCalling(false);
     }
   };
 
@@ -112,6 +195,80 @@ export default function AIPage() {
               </button>
             </article>
           ))}
+
+          <article className="max-w-4xl rounded-[20px] border border-[#a6ff7b36] bg-[#0e320f] px-4 py-3 sm:rounded-[24px] sm:px-5 sm:py-4">
+            <p className="text-sm font-semibold text-[#ebffdd] sm:text-lg">Call Restaurant (Demo)</p>
+            <p className="mt-1 text-xs text-[#acd39a] sm:text-sm">
+              Calls are restricted to your configured demo target number, with a 2-minute cap and one retry.
+            </p>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              <select
+                value={selectedGroupId}
+                onChange={(event) => setSelectedGroupId(event.target.value)}
+                className="h-11 rounded-xl border border-[#87f95e40] bg-[#a8ff861f] px-3 text-sm text-[#e7ffd8] focus:outline-none"
+              >
+                <option value="">Select group to notify</option>
+                <option value="creator-only">Notify Me Only</option>
+                {groups.map((group) => (
+                  <option key={group.id} value={group.id}>
+                    {group.name} ({group.members?.length || 0} members)
+                  </option>
+                ))}
+              </select>
+              <input
+                value={callForm.restaurant_name}
+                onChange={(event) => setCallForm((prev) => ({ ...prev, restaurant_name: event.target.value }))}
+                placeholder="Restaurant name"
+                className="h-11 rounded-xl border border-[#87f95e40] bg-[#a8ff861f] px-3 text-sm text-[#e7ffd8] placeholder:text-[#9dbc8f] focus:outline-none"
+              />
+              <input
+                value={callForm.reservation_time}
+                onChange={(event) => setCallForm((prev) => ({ ...prev, reservation_time: event.target.value }))}
+                placeholder="Reservation time"
+                className="h-11 rounded-xl border border-[#87f95e40] bg-[#a8ff861f] px-3 text-sm text-[#e7ffd8] placeholder:text-[#9dbc8f] focus:outline-none"
+              />
+              <input
+                value={callForm.party_size}
+                onChange={(event) => setCallForm((prev) => ({ ...prev, party_size: event.target.value }))}
+                placeholder="Party size"
+                className="h-11 rounded-xl border border-[#87f95e40] bg-[#a8ff861f] px-3 text-sm text-[#e7ffd8] placeholder:text-[#9dbc8f] focus:outline-none"
+              />
+              <input
+                value={callForm.special_request}
+                onChange={(event) => setCallForm((prev) => ({ ...prev, special_request: event.target.value }))}
+                placeholder="Special request (optional)"
+                className="h-11 rounded-xl border border-[#87f95e40] bg-[#a8ff861f] px-3 text-sm text-[#e7ffd8] placeholder:text-[#9dbc8f] focus:outline-none"
+              />
+            </div>
+            <button
+              onClick={startReservationCall}
+              disabled={calling}
+              className="mt-3 rounded-full bg-[#8ff451] px-4 py-2 text-xs font-bold text-[#12310f] disabled:opacity-60 sm:text-sm"
+            >
+              {calling ? "Starting call..." : "Start reservation call"}
+            </button>
+            {callJob ? (
+              <div className="mt-3 rounded-xl border border-[#95ff6d40] bg-[#d4ffc61a] p-3 text-xs text-[#e4ffd0] sm:text-sm">
+                <p className="font-semibold text-[#efffe8]">Call status: {callJob.status}</p>
+                <p className="mt-1">Restaurant: {callJob.restaurant_name}</p>
+                <p>Time: {callJob.reservation_time} · Party size: {callJob.party_size}</p>
+                <p>Attempts: {Array.isArray(callJob.attempts) ? callJob.attempts.length : 0}</p>
+                <p>Decision: {renderDecision(callJob.reservation_decision)}</p>
+                {callJob.decision_digit ? <p>Pressed key: {callJob.decision_digit}</p> : null}
+                {callJob.sms_notifications ? (
+                  <>
+                    <p>
+                      SMS notifications: {callJob.sms_notifications.sent}/{callJob.sms_notifications.recipients} sent
+                      {callJob.sms_notifications.failed ? `, ${callJob.sms_notifications.failed} failed` : ""}
+                    </p>
+                    {Array.isArray(callJob.sms_notifications.errors) && callJob.sms_notifications.errors.length ? (
+                      <p className="mt-1 text-[#ffd6a0]">{callJob.sms_notifications.errors[0]}</p>
+                    ) : null}
+                  </>
+                ) : null}
+              </div>
+            ) : null}
+          </article>
 
           {status ? <p className="text-sm font-semibold text-[#b3f98a]">{status}</p> : null}
           {error ? <p className="text-sm font-semibold text-[#ff9f9f]">{error}</p> : null}
