@@ -122,8 +122,8 @@ export default function AIPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#eef5ee] px-0 sm:px-4 sm:py-2">
-      <div className="relative mx-auto flex min-h-screen w-full max-w-[540px] flex-col overflow-hidden rounded-none bg-[#001f03] text-[#d9f0d2] sm:min-h-[96vh] sm:rounded-[36px]">
+    <div className="min-h-[100dvh] bg-[#eef5ee] px-0 sm:px-4 sm:py-2">
+      <div className="relative mx-auto flex min-h-[100dvh] w-full max-w-[540px] flex-col overflow-hidden rounded-none bg-[#001f03] text-[#d9f0d2] sm:min-h-[96vh] sm:rounded-[36px]">
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_16%_4%,rgba(130,255,77,0.22),transparent_36%),linear-gradient(180deg,#022606_0%,#001d03_55%,#001a03_100%)]" />
 
         <div className="relative flex-1 px-3 pb-[186px] pt-6 sm:px-4">

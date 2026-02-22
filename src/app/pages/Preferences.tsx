@@ -66,6 +66,10 @@ export function Preferences() {
       }
   }, [isAnimating, navigate]);
 
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  }, []);
+
   const handleLocation = (val: 'inside' | 'outside' | 'both') => {
     setPrefs({ ...prefs, locationType: val });
     if (step === 0) setStep(1);
@@ -134,9 +138,20 @@ export function Preferences() {
   }
 
   return (
-    <div className="relative min-h-[100dvh] flex flex-col items-center justify-start pt-12 p-6 text-white overflow-y-auto pb-32 bg-transparent">
-      
-      <div className="z-10 w-full max-w-md space-y-8">
+    <div className="relative w-full h-[100dvh] overflow-hidden bg-transparent">
+      <div
+        className="relative z-10"
+        style={{
+          paddingTop: "env(safe-area-inset-top)",
+          paddingBottom: "env(safe-area-inset-bottom)",
+          height: "100dvh",
+          boxSizing: "border-box",
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
+      <div className="flex-1 overflow-y-auto p-6 pb-32">
+      <div className="z-10 w-full max-w-md mx-auto space-y-8">
         <div className="text-center space-y-2">
           <p className="text-xs text-white/40 uppercase tracking-widest font-bold">Step {step + 1} of 5</p>
           <h1 className="text-3xl font-bold text-white">Let's tailor your day.</h1>
@@ -342,7 +357,7 @@ export function Preferences() {
             </motion.div>
           )}
         </AnimatePresence>
-      </div>
+      </div></div></div>
     </div>
   );
 }

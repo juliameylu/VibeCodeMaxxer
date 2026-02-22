@@ -113,7 +113,7 @@ export function Deadlines() {
   const todayRemaining = today.filter(a => !a.done).length;
 
   return (
-    <div className="min-h-[100dvh] bg-transparent text-white pb-24">
+    <div className="min-h-full bg-transparent text-white pb-24">
       <PageHeader />
 
       {/* Header */}

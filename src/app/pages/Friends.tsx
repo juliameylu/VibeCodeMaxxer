@@ -161,7 +161,7 @@ export function Friends() {
   };
 
   return (
-    <div className="min-h-[100dvh] bg-transparent text-white pb-24">
+    <div className="min-h-full bg-transparent text-white pb-24">
       <PageHeader />
 
       {/* Header */}

@@ -28,7 +28,7 @@ export default function WelcomePage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center px-4">
+    <div className="flex min-h-[100dvh] items-center justify-center px-4">
       <section className="glass-card w-full max-w-md p-6">
         <p className="text-xs font-semibold uppercase tracking-wide text-ink/60">Welcome</p>
         <h1 className="mt-2 text-3xl font-bold text-ink">What will you do today?</h1>

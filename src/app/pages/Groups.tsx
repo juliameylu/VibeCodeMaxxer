@@ -111,7 +111,7 @@ export function Groups() {
   };
 
   return (
-    <div className="min-h-[100dvh] bg-transparent text-white pb-24">
+    <div className="min-h-full bg-transparent text-white pb-24">
       <PageHeader />
       {/* Header */}
       <div className="px-5 pb-4 border-b border-white/5">

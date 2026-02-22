@@ -9,23 +9,23 @@ import { clsx } from 'clsx';
 
 // Reusing the image mapping logic
 const categoryImages: Record<string, string> = {
-  "Beaches": "https://images.unsplash.com/photo-1650055679198-267afbe95248?auto=format&fit=crop&w=1200",
-  "Hikes": "https://images.unsplash.com/photo-1643654573191-7b53c3672bf3?auto=format&fit=crop&w=1200",
-  "Outdoors": "https://images.unsplash.com/photo-1643654573191-7b53c3672bf3?auto=format&fit=crop&w=1200",
-  "Parks & Gardens": "https://images.unsplash.com/photo-1643654573191-7b53c3672bf3?auto=format&fit=crop&w=1200",
-  "Art": "https://images.unsplash.com/photo-1641565487012-7a653144e932?auto=format&fit=crop&w=1200",
-  "Museums": "https://images.unsplash.com/photo-1641565487012-7a653144e932?auto=format&fit=crop&w=1200",
-  "History": "https://images.unsplash.com/photo-1641565487012-7a653144e932?auto=format&fit=crop&w=1200",
-  "Live Music": "https://images.unsplash.com/photo-1568215425379-7a994872739d?auto=format&fit=crop&w=1200",
-  "Theater & Comedy": "https://images.unsplash.com/photo-1568215425379-7a994872739d?auto=format&fit=crop&w=1200",
-  "Coffee Shops": "https://images.unsplash.com/photo-1750658395656-d967c21833e5?auto=format&fit=crop&w=1200",
-  "Food & Treats": "https://images.unsplash.com/photo-1768854592371-1042a977798a?auto=format&fit=crop&w=1200",
-  "Shopping": "https://images.unsplash.com/photo-1551449440-f29f2e53104b?auto=format&fit=crop&w=1200",
-  "Wineries": "https://images.unsplash.com/photo-1768854592371-1042a977798a?auto=format&fit=crop&w=1200",
-  "Breweries": "https://images.unsplash.com/photo-1768854592371-1042a977798a?auto=format&fit=crop&w=1200",
-  "Day Trips": "https://images.unsplash.com/photo-1551449440-f29f2e53104b?auto=format&fit=crop&w=1200",
+  "Beaches": "https://images.unsplash.com/photo-1650055679198-267afbe95248?fm=jpg&fit=crop&w=1200",
+  "Hikes": "https://images.unsplash.com/photo-1643654573191-7b53c3672bf3?fm=jpg&fit=crop&w=1200",
+  "Outdoors": "https://images.unsplash.com/photo-1643654573191-7b53c3672bf3?fm=jpg&fit=crop&w=1200",
+  "Parks & Gardens": "https://images.unsplash.com/photo-1643654573191-7b53c3672bf3?fm=jpg&fit=crop&w=1200",
+  "Art": "https://images.unsplash.com/photo-1641565487012-7a653144e932?fm=jpg&fit=crop&w=1200",
+  "Museums": "https://images.unsplash.com/photo-1641565487012-7a653144e932?fm=jpg&fit=crop&w=1200",
+  "History": "https://images.unsplash.com/photo-1641565487012-7a653144e932?fm=jpg&fit=crop&w=1200",
+  "Live Music": "https://images.unsplash.com/photo-1568215425379-7a994872739d?fm=jpg&fit=crop&w=1200",
+  "Theater & Comedy": "https://images.unsplash.com/photo-1568215425379-7a994872739d?fm=jpg&fit=crop&w=1200",
+  "Coffee Shops": "https://images.unsplash.com/photo-1750658395656-d967c21833e5?fm=jpg&fit=crop&w=1200",
+  "Food & Treats": "https://images.unsplash.com/photo-1768854592371-1042a977798a?fm=jpg&fit=crop&w=1200",
+  "Shopping": "https://images.unsplash.com/photo-1551449440-f29f2e53104b?fm=jpg&fit=crop&w=1200",
+  "Wineries": "https://images.unsplash.com/photo-1768854592371-1042a977798a?fm=jpg&fit=crop&w=1200",
+  "Breweries": "https://images.unsplash.com/photo-1768854592371-1042a977798a?fm=jpg&fit=crop&w=1200",
+  "Day Trips": "https://images.unsplash.com/photo-1551449440-f29f2e53104b?fm=jpg&fit=crop&w=1200",
 };
-const fallbackImage = "https://images.unsplash.com/photo-1551449440-f29f2e53104b?auto=format&fit=crop&w=1200";
+const fallbackImage = "https://images.unsplash.com/photo-1551449440-f29f2e53104b?fm=jpg&fit=crop&w=1200";
 
 export function EventDetails() {
   const { id } = useParams();
@@ -108,7 +108,7 @@ export function EventDetails() {
   };
 
   return (
-    <div className="min-h-screen bg-transparent text-white pb-20 overflow-x-hidden">
+    <div className="min-h-full bg-transparent text-white pb-20 overflow-x-hidden">
       {/* Hero Image */}
       <div className="relative h-[50vh] w-full">
         <img src={imageUrl} alt={place.name} className="w-full h-full object-cover" />

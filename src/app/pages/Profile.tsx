@@ -136,7 +136,7 @@ export function Profile() {
 
   if (loading) {
     return (
-      <div className="min-h-[100dvh] flex items-center justify-center bg-transparent">
+      <div className="min-h-full flex items-center justify-center bg-transparent">
         <div className="w-8 h-8 border-3 border-[#F2E8CF]/20 border-t-[#F2E8CF] rounded-full animate-spin" />
       </div>
     );
@@ -145,7 +145,7 @@ export function Profile() {
   // Not logged in
   if (!user) {
     return (
-      <div className="min-h-[100dvh] bg-transparent pb-24 flex flex-col items-center justify-center px-6">
+      <div className="min-h-full bg-transparent pb-24 flex flex-col items-center justify-center px-6">
         <PageHeader />
         <div className="text-center max-w-sm">
           <div className="w-20 h-20 bg-white/10 rounded-full mx-auto flex items-center justify-center mb-4">
@@ -168,7 +168,7 @@ export function Profile() {
   }
 
   return (
-    <div className="min-h-[100dvh] bg-transparent pb-24 text-white">
+    <div className="min-h-full bg-transparent pb-24 text-white">
       <PageHeader />
 
       {/* Header */}
@@ -265,7 +265,7 @@ export function Profile() {
       </div>
 
       {/* Menu items */}
-      <div className="px-5 mt-6 space-y-2">
+      <div className="px-5 mt-6 space-y-3">
         <Link to="/friends">
           <MenuItem icon={UserPlus} label="FRIENDS" desc="View friends & invite new ones" />
         </Link>
@@ -280,7 +280,7 @@ export function Profile() {
         </Link>
 
         {/* Train Jarvis Widget */}
-        <div className="pt-3">
+        <div className="mt-1">
           <div className="bg-gradient-to-r from-[#F2E8CF]/10 to-[#64B5F6]/10 border border-[#F2E8CF]/15 rounded-xl overflow-hidden">
             <button
               onClick={() => setShowTrainer(!showTrainer)}
@@ -346,7 +346,7 @@ export function Profile() {
           </div>
         </div>
 
-        <div className="pt-4">
+        <div className="mt-1">
           <button
             onClick={handleSignOut}
             className="w-full flex items-center gap-3 p-4 bg-red-500/12 rounded-xl border border-red-500/20 text-red-400 active:bg-red-500/18 transition-colors"

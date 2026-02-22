@@ -15,7 +15,7 @@ export default function AppShell({ title, subtitle, children }) {
   const { unreadCount } = useNotifications({ pollMs: 15000 });
 
   return (
-    <div className="min-h-screen px-3 py-4 sm:py-6">
+    <div className="min-h-[100dvh] px-3 py-4 sm:py-6">
       <div className="phone-shell mx-auto w-full max-w-[450px] pb-28">
         <header className="glass-card p-4">
           <div className="flex items-start justify-between gap-3">

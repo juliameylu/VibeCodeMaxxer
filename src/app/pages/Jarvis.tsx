@@ -1201,6 +1201,7 @@ export function Jarvis() {
   const [callError, setCallError] = useState("");
   const [callStatus, setCallStatus] = useState("");
   const [callJob, setCallJob] = useState<ReservationCallJob | null>(null);
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Persist messages whenever they change
@@ -1209,6 +1210,45 @@ export function Jarvis() {
   }, [messages]);
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, isTyping]);
+
+  useEffect(() => {
+    const isEditable = (el: EventTarget | null) => {
+      if (!(el instanceof HTMLElement)) return false;
+      const tag = el.tagName.toLowerCase();
+      return tag === "input" || tag === "textarea" || el.isContentEditable;
+    };
+
+    const syncKeyboard = () => {
+      const vv = window.visualViewport;
+      const active = document.activeElement;
+      const focusedEditable = isEditable(active);
+      if (!vv) {
+        setKeyboardOpen(focusedEditable);
+        return;
+      }
+      const shrunk = vv.height < window.innerHeight * 0.9;
+      setKeyboardOpen(shrunk || focusedEditable);
+    };
+
+    const onFocusIn = (e: FocusEvent) => {
+      if (isEditable(e.target)) setKeyboardOpen(true);
+    };
+    const onFocusOut = () => {
+      setTimeout(syncKeyboard, 60);
+    };
+
+    document.addEventListener("focusin", onFocusIn);
+    document.addEventListener("focusout", onFocusOut);
+    window.visualViewport?.addEventListener("resize", syncKeyboard);
+    window.visualViewport?.addEventListener("scroll", syncKeyboard);
+    syncKeyboard();
+    return () => {
+      document.removeEventListener("focusin", onFocusIn);
+      document.removeEventListener("focusout", onFocusOut);
+      window.visualViewport?.removeEventListener("resize", syncKeyboard);
+      window.visualViewport?.removeEventListener("scroll", syncKeyboard);
+    };
+  }, []);
 
   useEffect(() => {
     if (!callJob?.job_id) return undefined;
@@ -1548,7 +1588,7 @@ export function Jarvis() {
   const hasHistory = messages.length > 1;
 
   return (
-    <div className="min-h-[100dvh] flex flex-col bg-transparent pb-16">
+    <div className="min-h-full flex flex-col bg-transparent">
       {/* Header */}
       <div className="bg-gradient-to-b from-white/5 to-transparent px-5 pt-2 pb-4 flex-shrink-0">
         <PageHeader />
@@ -1712,31 +1752,40 @@ export function Jarvis() {
       )}
 
       {/* Input */}
-      {clarification && (
-        <div className="px-3 pb-2 flex gap-1.5 overflow-x-auto">
-          {clarificationOptions(clarification).map((option) => (
-            <button
-              key={option}
-              onClick={() => handleClarificationChip(option)}
-              className="whitespace-nowrap bg-[#F2E8CF]/10 text-[#F2E8CF] border border-[#F2E8CF]/20 rounded-full px-3 py-1.5 text-[11px] font-bold active:scale-95 transition-transform"
-            >
-              {option}
-            </button>
-          ))}
+      <div
+        className="flex-shrink-0"
+        style={{
+          marginBottom: keyboardOpen
+            ? "calc(env(safe-area-inset-bottom) + 2px)"
+            : "var(--bottom-nav-height, 76px)",
+        }}
+      >
+        {clarification && (
+          <div className="px-3 pb-2 flex gap-1.5 overflow-x-auto">
+            {clarificationOptions(clarification).map((option) => (
+              <button
+                key={option}
+                onClick={() => handleClarificationChip(option)}
+                className="whitespace-nowrap bg-[#F2E8CF]/10 text-[#F2E8CF] border border-[#F2E8CF]/20 rounded-full px-3 py-1.5 text-[11px] font-bold active:scale-95 transition-transform"
+              >
+                {option}
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="p-3 bg-black/40 backdrop-blur-xl border-t border-white/10 flex gap-2 flex-shrink-0">
+          <input
+            type="text"
+            placeholder="Ask Jarvis anything..."
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && handleSend()}
+            className="flex-1 bg-white/10 rounded-full px-4 py-2.5 text-[14px] text-white placeholder:text-white/30 focus:outline-none focus:ring-1 focus:ring-[#F2E8CF]/30 border border-white/15"
+          />
+          <button onClick={handleSend} className="bg-[#F2E8CF] text-[#1a2e10] p-2.5 rounded-full shadow-lg shadow-[#F2E8CF]/15 active:scale-90 transition-transform">
+            <Send size={18} />
+          </button>
         </div>
-      )}
-      <div className="p-3 bg-black/40 backdrop-blur-xl border-t border-white/10 flex gap-2 flex-shrink-0">
-        <input
-          type="text"
-          placeholder="Ask Jarvis anything..."
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={e => e.key === "Enter" && handleSend()}
-          className="flex-1 bg-white/10 rounded-full px-4 py-2.5 text-[14px] text-white placeholder:text-white/30 focus:outline-none focus:ring-1 focus:ring-[#F2E8CF]/30 border border-white/15"
-        />
-        <button onClick={handleSend} className="bg-[#F2E8CF] text-[#1a2e10] p-2.5 rounded-full shadow-lg shadow-[#F2E8CF]/15 active:scale-90 transition-transform">
-          <Send size={18} />
-        </button>
       </div>
 
       <BottomNav />

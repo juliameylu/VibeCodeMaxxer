@@ -124,7 +124,7 @@ export function EventInfo() {
 
   if (!place) {
     return (
-      <div className="min-h-[100dvh] flex flex-col items-center justify-center bg-transparent p-6 text-white">
+      <div className="min-h-full flex flex-col items-center justify-center bg-transparent p-6 text-white">
         <p className="text-white/40 text-lg mb-4">Event not found</p>
         <button onClick={() => navigate(-1)} className="text-[#F2E8CF] font-bold">GO BACK</button>
       </div>
@@ -185,7 +185,7 @@ export function EventInfo() {
   };
 
   return (
-    <div className="min-h-[100dvh] bg-transparent text-white pb-24">
+    <div className="min-h-full bg-transparent text-white pb-24">
       {/* Hero */}
       <div className="relative h-[44vh]">
         <img src={place.image} alt={place.name} className="w-full h-full object-cover" />

@@ -15,12 +15,12 @@ const NAV_ITEMS = [
 
 function coverFor(item) {
   const category = String(item?.category || "").toLowerCase();
-  if (category === "food") return "https://images.unsplash.com/photo-1512621776951-a57141f2eefd?auto=format&fit=crop&w=900&q=80";
-  if (category === "outdoor") return "https://images.unsplash.com/photo-1501555088652-021faa106b9b?auto=format&fit=crop&w=900&q=80";
-  if (category === "indoor") return "https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&w=900&q=80";
-  if (category === "concerts") return "https://images.unsplash.com/photo-1470229722913-7c0e2dbbafd3?auto=format&fit=crop&w=900&q=80";
-  if (category === "campus") return "https://images.unsplash.com/photo-1523050854058-8df90110c9f1?auto=format&fit=crop&w=900&q=80";
-  return "https://images.unsplash.com/photo-1476514525535-07fb3b4ae5f1?auto=format&fit=crop&w=900&q=80";
+  if (category === "food") return "https://images.unsplash.com/photo-1512621776951-a57141f2eefd?fm=jpg&fit=crop&w=900&q=80";
+  if (category === "outdoor") return "https://images.unsplash.com/photo-1501555088652-021faa106b9b?fm=jpg&fit=crop&w=900&q=80";
+  if (category === "indoor") return "https://images.unsplash.com/photo-1497366754035-f200968a6e72?fm=jpg&fit=crop&w=900&q=80";
+  if (category === "concerts") return "https://images.unsplash.com/photo-1470229722913-7c0e2dbbafd3?fm=jpg&fit=crop&w=900&q=80";
+  if (category === "campus") return "https://images.unsplash.com/photo-1523050854058-8df90110c9f1?fm=jpg&fit=crop&w=900&q=80";
+  return "https://images.unsplash.com/photo-1476514525535-07fb3b4ae5f1?fm=jpg&fit=crop&w=900&q=80";
 }
 
 export default function ExploreHubPage() {
@@ -67,7 +67,7 @@ export default function ExploreHubPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#f5f6f4] px-3 py-4 text-[#1c2320]">
+    <div className="min-h-[100dvh] bg-[#f5f6f4] px-3 py-4 text-[#1c2320]">
       <div className="mx-auto w-full max-w-[430px] rounded-[34px] border border-black/5 bg-[#f3f4f2] p-3 pb-24 shadow-[0_20px_50px_rgba(0,0,0,0.08)]">
         <header className="rounded-[24px] bg-[#f8f8f7] p-3">
           <div className="flex items-center gap-2">

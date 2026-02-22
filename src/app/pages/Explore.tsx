@@ -10,7 +10,7 @@ import { PageHeader } from "../components/PageHeader";
 import { MustangIcon } from "../components/MustangIcon";
 import { getUserPreferences, getPreferenceScore, type UserPreferences } from "../utils/preferences";
 
-const fallbackImage = "https://images.unsplash.com/photo-1551449440-f29f2e53104b?auto=format&fit=crop&w=800";
+const fallbackImage = "https://images.unsplash.com/photo-1551449440-f29f2e53104b?fm=jpg&fit=crop&w=800";
 
 // Events widget data (moved from Dashboard)
 const sloEvents = [
@@ -118,7 +118,12 @@ export function Explore() {
   const filteredEvents = sloEvents.filter(e => e.when === eventFilter);
 
   return (
-    <div className="min-h-[100dvh] bg-transparent text-white pb-20">
+    <div
+      className="min-h-full text-white pb-20"
+      style={{
+        background: "linear-gradient(180deg, rgba(13,18,8,0.92) 0%, rgba(13,18,8,0.78) 14%, rgba(13,18,8,0) 36%)",
+      }}
+    >
       <PageHeader />
 
       {/* Header - fixed clash by using smaller text */}

@@ -249,7 +249,7 @@ export function Adventures() {
   const rsvpColors = { going: "bg-green-500 text-white", maybe: "bg-yellow-500 text-white", declined: "bg-red-400 text-white", pending: "bg-gray-300 text-gray-600" };
 
   return (
-    <div className="min-h-[100dvh] pb-20 flex flex-col relative overflow-hidden bg-transparent text-white">
+    <div className="min-h-full pb-20 flex flex-col relative overflow-hidden bg-transparent text-white">
       {/* Header */}
       <div className="relative z-10 px-5 pt-6 pb-4 border-b border-white/10 backdrop-blur-md bg-black/20">
         {!selectedAdventure ? (
@@ -811,7 +811,7 @@ export function AdventureJoin() {
   }, [code]);
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center p-6 relative overflow-hidden bg-transparent">
+    <div className="min-h-full flex flex-col items-center justify-center p-6 relative overflow-hidden bg-transparent">
       <motion.div
         initial={{ scale: 0.8, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}

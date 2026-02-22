@@ -957,12 +957,12 @@ export function registerPlannerApi(app) {
     const email = normalizeEmail(req.body?.email || "demo@polyjarvis.local");
     const displayName = String(req.body?.display_name || "Demo User").trim() || "Demo User";
 
-    let user = findUserByEmail(email);
+    let user = [...store.users.values()].find((candidate) => candidate.email === email);
     if (!user) {
       user = {
         id: randomUUID(),
         email,
-        password_hash: hashPassword(randomUUID()),
+        password: randomUUID(),
         display_name: displayName,
         phone: normalizePhone(req.body?.phone || DEMO_GUEST_PHONE_NUMBER || ""),
         onboarding_complete: false,

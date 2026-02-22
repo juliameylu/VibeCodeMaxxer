@@ -57,7 +57,7 @@ export function MyEvents() {
   const maybeCount = myEvents.filter(e => e.status === "maybe").length;
 
   return (
-    <div className="min-h-[100dvh] bg-transparent text-white pb-24">
+    <div className="min-h-full bg-transparent text-white pb-24">
       <PageHeader />
 
       <div className="px-5 pb-2">

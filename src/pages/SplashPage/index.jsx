@@ -6,7 +6,7 @@ export default function SplashPage() {
 
   if (auth.loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center px-6">
+      <div className="flex min-h-[100dvh] items-center justify-center px-6">
         <div className="glass-card w-full max-w-sm p-6 text-center">
           <p className="text-sm font-semibold uppercase tracking-wide text-ink/60">SLO Planner</p>
           <h1 className="mt-2 text-2xl font-bold text-ink">Loading your session</h1>

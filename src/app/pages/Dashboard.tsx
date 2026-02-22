@@ -589,7 +589,7 @@ export function Dashboard() {
   const imagineSpot = imagineSpots[imagineIdx];
 
   return (
-    <div className="min-h-[100dvh] bg-transparent pb-24 text-white font-sans">
+    <div className="min-h-full bg-transparent pb-24 text-white font-sans">
       <PageHeader />
 
       {/* Header with Jarvis Bubble */}

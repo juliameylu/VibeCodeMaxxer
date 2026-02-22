@@ -46,7 +46,7 @@ export default function AuthSignupPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center px-4">
+    <div className="flex min-h-[100dvh] items-center justify-center px-4">
       <section className="glass-card w-full max-w-md p-6">
         <h1 className="text-2xl font-bold text-ink">Create Account</h1>
         <p className="mt-1 text-sm text-soft">Email + password signup. Canvas can be connected later.</p>

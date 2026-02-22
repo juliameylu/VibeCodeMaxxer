@@ -76,7 +76,7 @@ export default function PlannerPage() {
   const completionRate = Math.round((completedCount / tasks.length) * 100);
 
   return (
-    <div className="min-h-screen bg-white">
+    <div className="min-h-[100dvh] bg-white">
       {/* Header */}
       <header className="sticky top-0 z-50 bg-white border-b border-slate-200">
         <div className="max-w-6xl mx-auto px-4 md:px-6">

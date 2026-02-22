@@ -192,7 +192,7 @@ export function Plans() {
   const pinnedPlaces = places.filter(p => pinnedIds.includes(p.id));
 
   return (
-    <div className="min-h-[100dvh] bg-transparent text-white pb-24 flex flex-col">
+    <div className="min-h-full bg-transparent text-white pb-24 flex flex-col">
       <PageHeader />
 
       {/* Clean header — no gradient rectangle */}
