@@ -1,3 +1,5 @@
+import { scorePlacePreferenceMatch } from "./preferenceMatching";
+
 const STORAGE_KEY = "restaurant_reco_profile_v1";
 const IMPRESSION_KEY = "restaurant_reco_impressions_v1";
 const MAX_HISTORY = 600;
@@ -79,11 +81,7 @@ function novelty(placeId, history) {
 }
 
 function preferenceScore(place, prefs) {
-  const prefTokens = (prefs || []).map((pref) => pref.toLowerCase());
-  if (!prefTokens.length) return 0;
-  const text = `${place.name} ${place.address}`.toLowerCase();
-  const hits = prefTokens.filter((token) => text.includes(token)).length;
-  return hits / prefTokens.length;
+  return scorePlacePreferenceMatch(place, prefs);
 }
 
 function explorationRows(rows, count) {
@@ -133,8 +131,11 @@ export function clearRestaurantProfile() {
 export function rankRestaurants({ items, activePreferences = [], epsilon = DEFAULT_EPSILON }) {
   const profile = loadProfile();
   const tokenWeights = buildTagWeights(profile.history);
+  const safeItems = Array.isArray(items)
+    ? items.filter((item) => item && typeof item === "object")
+    : [];
 
-  const rawRows = items.map((place) => {
+  const rawRows = safeItems.map((place) => {
     const quality = Number(place.rating || 0);
     const distance = Number(place.distanceMeters || 0);
     const distanceScore = distance > 0 ? 1 / distance : 0;

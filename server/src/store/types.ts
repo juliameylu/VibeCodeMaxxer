@@ -47,6 +47,38 @@ export interface OauthState {
   created_at: string;
 }
 
+export interface MockReservationSlot {
+  slot_id: string;
+  start_ts: string;
+  end_ts: string;
+  label: string;
+  seats_remaining: number;
+  provider: "yelp";
+  source: "mock_yelp";
+  party_size_min: number;
+  party_size_max: number;
+  is_bookable: boolean;
+  reservation_url: string;
+  cancellation_policy: string;
+  deposit_cents: number;
+  currency: "usd";
+}
+
+export interface MockReservation {
+  reservation_id: string;
+  user_id: string;
+  restaurant_id: string;
+  restaurant_name: string;
+  slot_id: string;
+  start_ts: string;
+  end_ts: string;
+  party_size: number;
+  special_requests: string[];
+  notes: string;
+  status: "confirmed" | "cancelled";
+  created_at: string;
+}
+
 export interface GoogleCalendarEvent {
   kind: "calendar#event";
   etag: string;

@@ -1,0 +1,123 @@
+export const DEMO_PLACE_SEMANTIC_META = {
+  p1: {
+    cuisine_tags: ["coffee", "pastries"],
+    menu_tags: ["oat milk latte", "pour over", "croissant"],
+    attribute_tags: ["wifi", "study friendly", "outdoor seating"],
+    review_snippets: ["Great for laptop work during the afternoon."],
+  },
+  p2: {
+    cuisine_tags: ["coffee", "cafe"],
+    menu_tags: ["espresso", "cold brew", "bagel sandwich"],
+    attribute_tags: ["wifi", "quiet", "study friendly"],
+    review_snippets: ["Plenty of students working here with laptops."],
+  },
+  p3: {
+    cuisine_tags: ["coffee", "breakfast"],
+    menu_tags: ["drip coffee", "muffins", "breakfast burrito"],
+    attribute_tags: ["casual", "quick bite"],
+    review_snippets: ["Reliable local coffee stop with quick service."],
+  },
+  p4: {
+    cuisine_tags: ["coffee", "artisan cafe"],
+    menu_tags: ["single origin espresso", "flat white", "toast"],
+    attribute_tags: ["outdoor seating", "wifi", "quiet"],
+    review_snippets: ["Bright patio and good coffee quality."],
+  },
+  p5: {
+    cuisine_tags: ["coffee", "acai"],
+    menu_tags: ["acai bowl", "vegan granola", "matcha"],
+    attribute_tags: ["vegan friendly", "outdoor seating"],
+    review_snippets: ["Solid plant based options and relaxed vibe."],
+  },
+  p6: {
+    cuisine_tags: ["coffee", "bakery"],
+    menu_tags: ["espresso", "scones", "sandwiches"],
+    attribute_tags: ["casual", "quick bite"],
+    review_snippets: ["Good bakery pairing with coffee."],
+  },
+  p7: {
+    cuisine_tags: ["mediterranean", "tapas"],
+    menu_tags: ["paella", "small plates", "cocktails"],
+    attribute_tags: ["outdoor seating", "date night"],
+    review_snippets: ["Great for evening dining and cocktails."],
+  },
+  p8: {
+    cuisine_tags: ["american", "bbq"],
+    menu_tags: ["tri tip sandwich", "fries", "burger"],
+    attribute_tags: ["casual", "group friendly", "late night"],
+    review_snippets: ["Popular late night option near downtown."],
+  },
+  p9: {
+    cuisine_tags: ["new american", "fusion"],
+    menu_tags: ["salmon", "noodles", "cocktails"],
+    attribute_tags: ["outdoor seating", "date night"],
+    review_snippets: ["Creekside patio makes this a strong date night pick."],
+  },
+  p10: {
+    cuisine_tags: ["american", "gastropub"],
+    menu_tags: ["burger", "wings", "craft beer"],
+    attribute_tags: ["late night", "group friendly"],
+    review_snippets: ["Good for groups and later dinners."],
+  },
+  p11: {
+    cuisine_tags: ["italian"],
+    menu_tags: ["pasta", "gnocchi", "wine"],
+    attribute_tags: ["date night", "reservation recommended"],
+    review_snippets: ["Classic Italian with romantic atmosphere."],
+  },
+  p12: {
+    cuisine_tags: ["brunch", "california"],
+    menu_tags: ["vegan toast", "salad", "egg sandwich"],
+    attribute_tags: ["vegetarian friendly", "brunch"],
+    review_snippets: ["Great brunch spot with healthy options."],
+  },
+  p13: {
+    cuisine_tags: ["sandwiches", "deli"],
+    menu_tags: ["tri tip sandwich", "salad", "soup"],
+    attribute_tags: ["casual", "quick bite"],
+    review_snippets: ["Huge sandwiches and fast ordering."],
+  },
+  p14: {
+    cuisine_tags: ["mexican"],
+    menu_tags: ["tacos", "burrito", "salsa bar"],
+    attribute_tags: ["casual", "budget friendly"],
+    review_snippets: ["Great taco value and quick service."],
+  },
+  p15: {
+    cuisine_tags: ["steakhouse", "new american"],
+    menu_tags: ["steak", "seafood", "wine"],
+    attribute_tags: ["date night", "upscale"],
+    review_snippets: ["Upscale dinner spot ideal for special occasions."],
+  },
+  p16: {
+    cuisine_tags: ["japanese", "sushi"],
+    menu_tags: ["sushi", "ramen", "sashimi"],
+    attribute_tags: ["reservation recommended", "dinner"],
+    review_snippets: ["Fresh sushi and quality Japanese menu."],
+  },
+  p17: {
+    cuisine_tags: ["california", "farm to table"],
+    menu_tags: ["seasonal menu", "vegetarian plate", "wine"],
+    attribute_tags: ["outdoor seating", "date night"],
+    review_snippets: ["Seasonal dishes and strong local ingredients."],
+  },
+  p18: {
+    cuisine_tags: ["brewpub", "american"],
+    menu_tags: ["pizza", "beer flight", "burger"],
+    attribute_tags: ["late night", "group friendly"],
+    review_snippets: ["Lively brewery with food available late."],
+  },
+  p19: {
+    cuisine_tags: ["healthy", "california"],
+    menu_tags: ["grain bowl", "vegan bowl", "salad"],
+    attribute_tags: ["vegan friendly", "gluten free options"],
+    review_snippets: ["Healthy and vegan friendly menu with gluten free choices."],
+  },
+  p20: {
+    cuisine_tags: ["coffee", "espresso"],
+    menu_tags: ["latte", "cold brew", "breakfast sandwich"],
+    attribute_tags: ["wifi", "study friendly"],
+    review_snippets: ["Good Wi-Fi and easy place to work remotely."],
+  },
+};
+
