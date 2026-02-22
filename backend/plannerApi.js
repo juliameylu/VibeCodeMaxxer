@@ -23,6 +23,8 @@ const store = {
   jamMembers: [],
   notifications: [],
   studyTasks: [],
+  availabilities: [],
+  reservations: [],
   aiActionLogs: [],
   pendingActions: new Map(),
   reservationIntents: [],
@@ -623,6 +625,41 @@ export function registerPlannerApi(app) {
     });
   });
 
+  app.post("/api/auth/google/mock", (req, res) => {
+    const googleEmail = normalizeEmail(req.body?.email || "student@calpoly.edu");
+    let user = [...store.users.values()].find((candidate) => candidate.email === googleEmail);
+
+    if (!user) {
+      const userId = randomUUID();
+      user = {
+        id: userId,
+        email: googleEmail,
+        display_name: String(req.body?.displayName || "Google User").trim(),
+        cal_poly_email: googleEmail.endsWith("@calpoly.edu") ? googleEmail : "",
+        onboarding_complete: false,
+        created_at: NOW().toISOString(),
+        password: `google-oauth-${randomUUID()}`
+      };
+      store.users.set(userId, user);
+      getOrInitPreferences(userId);
+      getOrInitConnections(userId);
+    }
+
+    const sessionToken = randomUUID();
+    store.sessions.set(sessionToken, user.id);
+
+    res.json({
+      sessionToken,
+      provider: "google_mock",
+      user: {
+        id: user.id,
+        email: user.email,
+        display_name: user.display_name,
+        onboarding_complete: user.onboarding_complete
+      }
+    });
+  });
+
   app.post("/api/auth/session-bootstrap", (req, res) => {
     const token = req.header("x-session-token") || req.body?.sessionToken;
     if (!token) {
@@ -694,6 +731,47 @@ export function registerPlannerApi(app) {
     store.connections.set(auth.userId, connections);
 
     res.json({ connected: true, provider: "google", connections });
+  });
+
+  app.get("/api/availability", (req, res) => {
+    const auth = requireSession(req, res);
+    if (!auth) return;
+    res.json({ availabilities: getUserAvailability(auth.userId) });
+  });
+
+  app.post("/api/availability", (req, res) => {
+    const auth = requireSession(req, res);
+    if (!auth) return;
+
+    const startAt = toIsoOrNull(req.body?.start_at);
+    const endAt = toIsoOrNull(req.body?.end_at);
+    if (!startAt || !endAt || new Date(endAt).getTime() <= new Date(startAt).getTime()) {
+      res.status(400).json({ error: "Valid start_at and end_at are required" });
+      return;
+    }
+
+    const slot = {
+      id: randomUUID(),
+      user_id: auth.userId,
+      start_at: startAt,
+      end_at: endAt,
+      source: String(req.body?.source || "manual"),
+      created_at: NOW().toISOString()
+    };
+    store.availabilities.push(slot);
+    res.json({ availability: slot, availabilities: getUserAvailability(auth.userId) });
+  });
+
+  app.get("/api/availability/overlap", (req, res) => {
+    const auth = requireSession(req, res);
+    if (!auth) return;
+    const withIds = String(req.query.with || "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    const userIds = [...new Set([auth.userId, ...withIds])];
+    const slots = findOverlapSlots(userIds).slice(0, 8);
+    res.json({ user_ids: userIds, overlap_slots: slots });
   });
 
   app.post("/api/calendar/ics/import", (req, res) => {
@@ -1575,11 +1653,19 @@ export function registerPlannerApi(app) {
     if (!auth) return;
 
     const itemId = req.body?.item_id || "event-brew-quiet";
-    const item = store.eventsCatalog.find((candidate) => candidate.id === itemId);
+    const includeGroup = Boolean(req.body?.include_group_availability);
+    const item = store.eventsCatalog.find((candidate) => candidate.id === itemId) || store.eventsCatalog[0];
+    const { slots, provider, participants } = bookingOptions({ userId: auth.userId, item, includeGroup });
+
     res.json({
       item,
+      provider,
+      participants,
+      suggested_slots: slots,
       providers: [
-        { name: "OpenTable", deep_link: "https://www.opentable.com/" },
+        { name: "Yelp Reservations", deep_link: "https://www.yelp.com/reservations" },
+        { name: "Ticketmaster", deep_link: "https://www.ticketmaster.com/" },
+        { name: "Cal Poly NOW", deep_link: "https://now.calpoly.edu/" },
         { name: "Google Maps", deep_link: "https://maps.google.com/" }
       ],
       requires_external_completion: true
