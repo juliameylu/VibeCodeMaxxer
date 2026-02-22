@@ -17,6 +17,7 @@ import { Tutorial } from "./pages/Tutorial";
 import { Plans } from "./pages/Plans";
 import { Friends } from "./pages/Friends";
 import { MapPage } from "./pages/Map";
+import { Restaurants } from "./pages/Restaurants";
 
 export const router = createBrowserRouter([
   {
@@ -40,6 +41,7 @@ export const router = createBrowserRouter([
       { path: "plans", Component: Plans },
       { path: "friends", Component: Friends },
       { path: "map", Component: MapPage },
+      { path: "restaurants", Component: Restaurants },
       { path: "*", Component: NotFound },
     ],
   },

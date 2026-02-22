@@ -1,8 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useNavigate } from 'react-router';
 import { ArrowRight, Car, Bike, Footprints, Dumbbell, Music, PartyPopper, Users, BookOpen, CalendarDays, X as XIcon } from 'lucide-react';
 import { clsx } from 'clsx';
+import { getSession } from "../../lib/auth/session";
+import { useUserCalendarState } from "../../lib/hooks/useUserCalendarState";
 
 type PreferenceState = {
   locationType: 'inside' | 'outside' | 'both' | null;
@@ -12,6 +14,44 @@ type PreferenceState = {
   interests: string[];
   noTransportSuggestions: boolean;
 };
+
+function distanceForCommute(commute: PreferenceState["commute"]) {
+  if (commute === "walk") return 2500;
+  if (commute === "bike") return 5000;
+  if (commute === "scooter") return 6000;
+  if (commute === "skateboard") return 3200;
+  if (commute === "unicycle") return 2200;
+  if (commute === "car") return 12000;
+  return 3500;
+}
+
+function buildBackendPreferencePayload(prefs: PreferenceState) {
+  const interests = [...new Set(
+    (prefs.interests || [])
+      .map((item) => String(item || "").trim().toLowerCase())
+      .filter(Boolean),
+  )].slice(0, 24);
+
+  const eventTags = [
+    prefs.locationType ? `location:${prefs.locationType}` : "",
+    prefs.commute ? `commute:${prefs.commute}` : "",
+    prefs.hasCar === null ? "" : prefs.hasCar ? "car:yes" : "car:no",
+    prefs.zipcar === null ? "" : prefs.zipcar ? "zipcar:yes" : "zipcar:no",
+    prefs.noTransportSuggestions ? "transport:skip" : "",
+  ]
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+
+  const priceMax = prefs.hasCar ? "$$$" : "$$";
+
+  return {
+    price_max: priceMax,
+    distance_max_m: distanceForCommute(prefs.commute),
+    favorite_categories: interests,
+    event_tags: eventTags,
+    diet_tags: [],
+  };
+}
 
 // Custom SVG Icons
 const ScooterIcon = ({ size = 20, className }: { size?: number, className?: string }) => (
@@ -45,6 +85,7 @@ const UnicycleIcon = ({ size = 20, className }: { size?: number, className?: str
 
 export function Preferences() {
   const navigate = useNavigate();
+  const session = useMemo(() => getSession(), []);
   const [prefs, setPrefs] = useState<PreferenceState>({
     locationType: null,
     commute: null,
@@ -56,6 +97,21 @@ export function Preferences() {
 
   const [step, setStep] = useState(0);
   const [isAnimating, setIsAnimating] = useState(false);
+  const [syncStatus, setSyncStatus] = useState("");
+  const [syncError, setSyncError] = useState("");
+  const lastSyncedSignatureRef = useRef("");
+
+  const userContext = useMemo(() => {
+    if (!session?.email && !session?.user_id) return null;
+    return {
+      user_id: session?.user_id || "",
+      email: session?.email || "",
+      name: session?.name || "",
+      timezone: session?.timezone || "America/Los_Angeles",
+    };
+  }, [session]);
+
+  const backendUserState = useUserCalendarState(userContext);
 
   useEffect(() => {
       if(isAnimating) {
@@ -65,6 +121,46 @@ export function Preferences() {
           return () => clearTimeout(timer);
       }
   }, [isAnimating, navigate]);
+
+  useEffect(() => {
+    const userId = backendUserState.data.user?.user_id;
+    if (!userId) return;
+    const hasInteraction = Boolean(
+      prefs.locationType
+      || prefs.commute
+      || prefs.hasCar !== null
+      || prefs.zipcar !== null
+      || prefs.noTransportSuggestions
+      || (prefs.interests || []).length > 0,
+    );
+    if (!hasInteraction) return;
+
+    const payload = buildBackendPreferencePayload(prefs);
+    const signature = `${userId}:${JSON.stringify(payload)}`;
+    if (signature === lastSyncedSignatureRef.current) return;
+
+    const timer = window.setTimeout(() => {
+      backendUserState
+        .savePreferences(payload)
+        .then(() => {
+          lastSyncedSignatureRef.current = signature;
+          setSyncError("");
+          setSyncStatus("Saved to backend");
+        })
+        .catch((error) => {
+          setSyncStatus("");
+          setSyncError(error instanceof Error ? error.message : "Could not save preferences.");
+        });
+    }, 260);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [
+    backendUserState.data.user?.user_id,
+    backendUserState.savePreferences,
+    prefs,
+  ]);
 
   const handleLocation = (val: 'inside' | 'outside' | 'both') => {
     setPrefs({ ...prefs, locationType: val });
@@ -144,6 +240,13 @@ export function Preferences() {
           <p className="text-xs text-white/40 capitalize tracking-wider font-semibold">Step {step + 1} of 5</p>
           <h1 className="text-3xl font-bold text-white">Let's tailor your day.</h1>
           <p className="text-sm text-white/50">Select what you want — or skip with ✕</p>
+          {backendUserState.data.user?.user_id ? (
+            <p className="text-[10px] text-white/35 font-bold uppercase tracking-widest">
+              Backend profile: {backendUserState.data.user.user_id.slice(0, 8)}
+            </p>
+          ) : null}
+          {syncStatus ? <p className="text-[10px] text-[#8BC34A] font-bold uppercase tracking-wider">{syncStatus}</p> : null}
+          {syncError ? <p className="text-[10px] text-red-300 font-bold">{syncError}</p> : null}
         </div>
 
         {/* Question 1: Location Type */}

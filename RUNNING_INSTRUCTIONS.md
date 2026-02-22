@@ -34,7 +34,10 @@ For production, keep real Yelp/Cal Poly integrations server-side (proxy or edge 
 
 The app now includes local API endpoints in `vite.config.js`:
 - `GET /api/places` (Yelp proxy)
-- `GET /api/events` (Cal Poly NOW scrape proxy)
+- `GET /api/events` (Cal Poly NOW + Ticketmaster scrape proxy)
+- `GET /api/mock-reservations/availability`
+- `POST /api/mock-reservations/book`
+- `GET /api/mock-reservations/:user_id`
 
 To use live data:
 1. Set `VITE_DEMO_MODE=false` in `.env`
@@ -44,6 +47,7 @@ To use live data:
 Notes:
 - Never put Yelp keys in client code or `VITE_` vars.
 - `/api/events` scrapes from `CALPOLY_EVENTS_SOURCE` (default uses `r.jina.ai` mirror of Cal Poly NOW).
+- Ticketmaster uses `TICKETMASTER_API_KEY` when provided; otherwise fallback fixtures are returned.
 
 ### 3. Build for Production
 
@@ -52,9 +56,45 @@ npm run build
 npm run preview
 ```
 
-## Backend (User + Preferences + Calendar Mock)
+## Backend (active app backend)
 
-The backend lives in `server/` and exposes:
+The active backend for `npm run dev` is:
+
+- `backend/server.js` (port `8787`, proxied by Vite)
+
+It now serves:
+- Planner/auth endpoints from `backend/plannerApi.js`
+- Yelp places proxy (`/api/places`)
+- Cal Poly NOW + Ticketmaster events (`/api/events`)
+- Mock reservation endpoints (`/api/mock-reservations/*`)
+
+### New Backend-Driven Profile/Calendar APIs (active frontend)
+
+- `POST /api/users/bootstrap`
+- `GET /api/users`
+- `GET /api/users/:user_id/state`
+- `PUT /api/users/:user_id/preferences`
+- `POST /api/users/:user_id/calendar/link-google`
+- `GET /api/users/:user_id/overlap/:other_user_id`
+- `GET /api/backend/state`
+- `GET /api/backend/endpoints`
+
+### Supabase reset + reseed helpers
+
+- `POST /api/admin/supabase/reset` with:
+```json
+{ "confirm": "RESET_SUPABASE", "seed": true }
+```
+- `POST /api/admin/supabase/seed-dummy-users`
+- Script wrapper:
+```bash
+node scripts/seed/seed_mock_users.js
+```
+
+## Legacy `server/` Backend (Optional)
+
+`server/` is an older TS backend and is not used by default `npm run dev`.
+It exposes:
 - `POST /api/users`
 - `GET /api/users/:user_id`
 - `GET/PUT /api/preferences/:user_id`
@@ -68,7 +108,7 @@ The backend lives in `server/` and exposes:
 - `POST /api/mock-reservations/book`
 - `GET /api/mock-reservations/:user_id`
 
-Run it locally:
+Run it manually only if you explicitly want the legacy stack:
 
 ```bash
 cd server
@@ -76,8 +116,8 @@ npm install
 npm run dev
 ```
 
-Default backend URL: `http://localhost:3001`
-Set `VITE_BACKEND_BASE_URL=http://localhost:3001` in frontend `.env` if needed.
+Legacy backend URL: `http://localhost:3001`
+If you run this legacy server, set `VITE_BACKEND_BASE_URL=http://localhost:3001` in frontend `.env`.
 
 ### Places Page Notes + Yelp Link Behavior
 

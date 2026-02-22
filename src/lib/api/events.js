@@ -49,13 +49,14 @@ export async function fetchCampusEvents(params = {}) {
     };
   }
 
-  // TODO: wire this endpoint to a server-side Cal Poly NOW parser/proxy endpoint.
-  // Keep scraping and any credentials server-side only.
   const search = new URLSearchParams({
     timeRange: params.timeRange || "today",
     category: params.category || "all",
     query: params.query || "",
   });
+  if (params.refresh) {
+    search.set("refresh", "true");
+  }
 
   return httpGetJson(withApiBase(`/api/events?${search.toString()}`));
 }

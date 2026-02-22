@@ -1,63 +1,138 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  callbackCalendar,
-  connectCalendar,
-  createOrGetUser,
-  getCalendarEvents,
-  getAvailability,
-  getCalendarStatus,
-  getPreferences,
-  syncCalendar,
-  updatePreferences,
+  bootstrapBackendUser,
+  getBackendUserState,
+  linkBackendGoogleCalendar,
+  updateBackendUserPreferences,
 } from "../api/backend";
 
-function nextSevenDayWindow() {
-  const start = new Date();
-  const end = new Date();
-  end.setDate(end.getDate() + 7);
+const DEFAULT_TIMEZONE = "America/Los_Angeles";
+
+const DEFAULT_PREFERENCES = {
+  price_max: "$$$",
+  distance_max_m: 3500,
+  diet_tags: [],
+  event_tags: [],
+  favorite_categories: [],
+};
+
+const EMPTY_STATE = {
+  user: null,
+  preferences: { ...DEFAULT_PREFERENCES },
+  connections: null,
+  availability: [],
+  calendarStatus: {
+    status: "disconnected",
+    provider: null,
+    last_sync_at: null,
+  },
+  syncedAt: null,
+  eventsCount: 0,
+  lastAction: null,
+};
+
+function normalizeContext(userContext) {
   return {
-    startTs: start.toISOString(),
-    endTs: end.toISOString(),
+    user_id: String(userContext?.user_id || userContext?.id || "").trim(),
+    email: String(userContext?.email || "").trim().toLowerCase(),
+    name: String(userContext?.name || userContext?.display_name || userContext?.username || "").trim(),
+    timezone: String(userContext?.timezone || DEFAULT_TIMEZONE).trim() || DEFAULT_TIMEZONE,
   };
 }
 
-export function useUserCalendarState(selectedUser) {
-  const userEmail = selectedUser?.email || "";
-  const userTimezone = selectedUser?.timezone || "";
+function mapAvailability(rows) {
+  return (Array.isArray(rows) ? rows : [])
+    .map((row) => ({
+      window_id: String(row.window_id || row.id || crypto.randomUUID()),
+      user_id: String(row.user_id || ""),
+      start_ts: String(row.start_ts || row.start_at || ""),
+      end_ts: String(row.end_ts || row.end_at || ""),
+      source: String(row.source || "manual"),
+    }))
+    .filter((row) => row.user_id && row.start_ts && row.end_ts)
+    .sort((a, b) => new Date(a.start_ts).getTime() - new Date(b.start_ts).getTime());
+}
 
-  const [data, setData] = useState({
-    user: null,
-    preferences: null,
-    calendarStatus: null,
-    availability: [],
-    syncedAt: null,
-    eventsCount: 0,
-    lastAction: "",
+function mapState(payload, fallbackContext) {
+  const user = payload?.user
+    ? {
+      user_id: String(payload.user.user_id || payload.user.id || ""),
+      email: String(payload.user.email || fallbackContext?.email || ""),
+      name: String(payload.user.name || payload.user.display_name || fallbackContext?.name || ""),
+      timezone: String(payload.user.timezone || fallbackContext?.timezone || DEFAULT_TIMEZONE),
+    }
+    : null;
+
+  const preferences = {
+    ...DEFAULT_PREFERENCES,
+    ...(payload?.preferences || {}),
+    diet_tags: Array.isArray(payload?.preferences?.diet_tags) ? payload.preferences.diet_tags : [],
+    event_tags: Array.isArray(payload?.preferences?.event_tags) ? payload.preferences.event_tags : [],
+    favorite_categories: Array.isArray(payload?.preferences?.favorite_categories)
+      ? payload.preferences.favorite_categories
+      : [],
+  };
+
+  const connections = payload?.connections || null;
+  const inferredCalendarStatus = {
+    status:
+      connections && (connections.calendar_google_connected || connections.calendar_ics_connected)
+        ? "connected"
+        : "disconnected",
+    provider: connections?.calendar_google_connected ? "google" : null,
+    last_sync_at: connections?.last_calendar_sync_at || null,
+  };
+
+  return {
+    user,
+    preferences,
+    connections,
+    availability: mapAvailability(payload?.availability),
+    calendarStatus: payload?.calendarStatus || inferredCalendarStatus,
+    syncedAt: payload?.syncedAt || payload?.calendarStatus?.last_sync_at || inferredCalendarStatus.last_sync_at || null,
+    eventsCount: Number(payload?.eventsCount || payload?.events_count || 0),
+    lastAction: payload?.lastAction || null,
+  };
+}
+
+export async function syncMockGoogleCalendarForUser(userContext) {
+  const normalized = normalizeContext(userContext);
+  if (!normalized.email && !normalized.user_id) {
+    throw new Error("Missing user identity (email or user_id).");
+  }
+
+  const bootstrap = await bootstrapBackendUser(normalized, {
+    syncCalendar: true,
+    syncSupabase: true,
   });
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState("");
 
-  const runLinkFlow = useCallback(async (user) => {
-    setData((prev) => ({ ...prev, lastAction: "Connecting calendar..." }));
-    const connect = await connectCalendar(user.user_id, "google");
-    setData((prev) => ({ ...prev, lastAction: "Running callback..." }));
-    await callbackCalendar(connect.state);
-    setData((prev) => ({ ...prev, lastAction: "Syncing calendar..." }));
-    const sync = await syncCalendar(user.user_id);
-    return sync;
-  }, []);
+  const userId = String(bootstrap?.user_id || bootstrap?.state?.user?.user_id || normalized.user_id || "").trim();
+  if (!userId) {
+    throw new Error("Could not resolve backend user.");
+  }
+
+  await linkBackendGoogleCalendar(userId, { timezone: normalized.timezone });
+  const state = await getBackendUserState(userId);
+
+  return {
+    profile_id: userId,
+    connected: state?.calendarStatus?.status === "connected",
+    synced_at: state?.syncedAt || state?.calendarStatus?.last_sync_at || new Date().toISOString(),
+  };
+}
+
+export function useUserCalendarState(userContext) {
+  const [data, setData] = useState(EMPTY_STATE);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [refreshNonce, setRefreshNonce] = useState(0);
+
+  const normalizedContext = useMemo(() => normalizeContext(userContext), [userContext]);
 
   const load = useCallback(async () => {
-    if (!userEmail || !userTimezone) {
-      setData({
-        user: null,
-        preferences: null,
-        calendarStatus: null,
-        availability: [],
-        syncedAt: null,
-        eventsCount: 0,
-        lastAction: "",
-      });
+    if (!normalizedContext.email && !normalizedContext.user_id) {
+      setData(EMPTY_STATE);
+      setError("");
       setIsLoading(false);
       return;
     }
@@ -66,125 +141,64 @@ export function useUserCalendarState(selectedUser) {
     setError("");
 
     try {
-      const user = await createOrGetUser({
-        email: userEmail,
-        timezone: userTimezone,
+      const bootstrap = await bootstrapBackendUser(normalizedContext, {
+        syncCalendar: false,
+        syncSupabase: true,
       });
+      const resolvedUserId = String(
+        bootstrap?.user_id || bootstrap?.state?.user?.user_id || normalizedContext.user_id || "",
+      ).trim();
 
-      const prefs = await getPreferences(user.user_id);
-      let status = await getCalendarStatus(user.user_id);
-      let syncedAt = status?.last_sync_at || null;
-
-      if (status?.status !== "connected") {
-        const sync = await runLinkFlow(user);
-        status = await getCalendarStatus(user.user_id);
-        syncedAt = sync.last_sync_at || status?.last_sync_at || null;
+      if (!resolvedUserId) {
+        throw new Error("Could not resolve backend user.");
       }
 
-      let availability = { windows: [] };
-      let eventsCount = 0;
-      if (status?.status === "connected") {
-        const { startTs, endTs } = nextSevenDayWindow();
-        availability = await getAvailability(user.user_id, startTs, endTs);
-        const events = await getCalendarEvents(user.user_id);
-        eventsCount = Array.isArray(events?.items) ? events.items.length : 0;
-      }
-
-      setData({
-        user,
-        preferences: prefs,
-        calendarStatus: status,
-        availability: availability.windows || [],
-        syncedAt,
-        eventsCount,
-        lastAction: "Loaded user state",
-      });
+      const statePayload = bootstrap?.state || (await getBackendUserState(resolvedUserId));
+      setData(mapState(statePayload, normalizedContext));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load user state.");
-      setData({
-        user: null,
-        preferences: null,
-        calendarStatus: null,
-        availability: [],
-        syncedAt: null,
-        eventsCount: 0,
-        lastAction: "",
-      });
+      setError(err instanceof Error ? err.message : "Could not load calendar state.");
+      setData(EMPTY_STATE);
     } finally {
       setIsLoading(false);
     }
-  }, [userEmail, userTimezone, runLinkFlow]);
-
-  const linkGoogleCalendar = useCallback(async () => {
-    if (!userEmail || !userTimezone) return;
-
-    setIsLoading(true);
-    setError("");
-
-    try {
-      setData((prev) => ({ ...prev, lastAction: "Creating user..." }));
-      const user = data.user || (await createOrGetUser({
-        email: userEmail,
-        timezone: userTimezone,
-      }));
-
-      const sync = await runLinkFlow(user);
-      setData((prev) => ({ ...prev, lastAction: "Fetching status + windows..." }));
-      const status = await getCalendarStatus(user.user_id);
-      const { startTs, endTs } = nextSevenDayWindow();
-      const availability = await getAvailability(user.user_id, startTs, endTs);
-      const events = await getCalendarEvents(user.user_id);
-      const eventsCount = Array.isArray(events?.items) ? events.items.length : 0;
-
-      setData((prev) => ({
-        ...prev,
-        user,
-        calendarStatus: status,
-        availability: availability.windows || [],
-        syncedAt: sync.last_sync_at,
-        eventsCount,
-        lastAction: "Calendar linked and synced",
-      }));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to link calendar.");
-    } finally {
-      setIsLoading(false);
-    }
-  }, [userEmail, userTimezone, data.user, runLinkFlow]);
-
-  const savePreferences = useCallback(async (payload) => {
-    if (!userEmail || !userTimezone) {
-      throw new Error("User context is missing.");
-    }
-
-    setError("");
-    const user =
-      data.user ||
-      (await createOrGetUser({
-        email: userEmail,
-        timezone: userTimezone,
-      }));
-
-    const next = await updatePreferences(user.user_id, payload);
-    setData((prev) => ({
-      ...prev,
-      user,
-      preferences: next,
-      lastAction: "Updated preferences",
-    }));
-    return next;
-  }, [userEmail, userTimezone, data.user]);
+  }, [normalizedContext]);
 
   useEffect(() => {
     load();
-  }, [load]);
+  }, [load, refreshNonce]);
+
+  const refresh = useCallback(() => {
+    setRefreshNonce((count) => count + 1);
+  }, []);
+
+  const savePreferences = useCallback(
+    async (payload) => {
+      const userId = data?.user?.user_id || normalizedContext.user_id;
+      if (!userId) {
+        throw new Error("Cannot save preferences without a user.");
+      }
+      await updateBackendUserPreferences(userId, payload || {});
+      refresh();
+    },
+    [data?.user?.user_id, normalizedContext.user_id, refresh],
+  );
+
+  const linkGoogleCalendar = useCallback(async () => {
+    const userId = data?.user?.user_id || normalizedContext.user_id;
+    if (!userId) {
+      throw new Error("Cannot link calendar without a user.");
+    }
+
+    await linkBackendGoogleCalendar(userId, { timezone: normalizedContext.timezone });
+    refresh();
+  }, [data?.user?.user_id, normalizedContext.user_id, normalizedContext.timezone, refresh]);
 
   return {
     data,
     isLoading,
     error,
-    refresh: load,
-    linkGoogleCalendar,
+    refresh,
     savePreferences,
+    linkGoogleCalendar,
   };
 }
