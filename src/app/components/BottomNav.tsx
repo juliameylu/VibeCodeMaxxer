@@ -10,32 +10,27 @@ export function BottomNav() {
   const navRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
-    const isEditable = (el: EventTarget | null) => {
-      if (!(el instanceof HTMLElement)) return false;
-      const tag = el.tagName.toLowerCase();
-      return tag === "input" || tag === "textarea" || el.isContentEditable;
-    };
-
     const syncFromViewport = () => {
       const vv = window.visualViewport;
-      if (!vv) return;
-      // iOS keyboard usually shrinks viewport height significantly.
-      const shrunk = vv.height < window.innerHeight * 0.9;
-      if (shrunk) setKeyboardOpen(true);
-      else {
-        const active = document.activeElement;
-        setKeyboardOpen(
-          !!active &&
-            active instanceof HTMLElement &&
-            (active.tagName.toLowerCase() === "input" ||
-              active.tagName.toLowerCase() === "textarea" ||
-              active.isContentEditable),
-        );
+      // Reliable signal on iOS/Capacitor: visual viewport shrinks when keyboard is open.
+      if (vv) {
+        const shrunk = vv.height < window.innerHeight * 0.9;
+        setKeyboardOpen(shrunk);
+        return;
       }
+      // Fallback for environments without visualViewport.
+      const active = document.activeElement;
+      const focusedEditable =
+        !!active &&
+        active instanceof HTMLElement &&
+        (active.tagName.toLowerCase() === "input" ||
+          active.tagName.toLowerCase() === "textarea" ||
+          active.isContentEditable);
+      setKeyboardOpen(focusedEditable);
     };
 
-    const onFocusIn = (e: FocusEvent) => {
-      if (isEditable(e.target)) setKeyboardOpen(true);
+    const onFocusIn = () => {
+      setTimeout(syncFromViewport, 50);
     };
     const onFocusOut = () => {
       setTimeout(() => syncFromViewport(), 60);
