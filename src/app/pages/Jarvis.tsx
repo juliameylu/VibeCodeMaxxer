@@ -8,9 +8,11 @@ import { PageHeader } from "../components/PageHeader";
 import { toast } from "sonner";
 import { getUserPreferences, getPersonalizedRecommendation, getPreferenceScore } from "../utils/preferences";
 import { places, getDistanceMiles, CAL_POLY_LAT, CAL_POLY_LNG, getPlaceEmoji, type Place } from "../data/places";
+import { apiFetch } from "../../lib/apiClient";
 
 const MESSAGES_KEY = "polyjarvis_chat_history";
 const HOME_LOCATION_KEY = "polyjarvis_home_location";
+const RESERVATION_STATUS_KEY = "polyjarvis_reservation_statuses";
 
 const promptPills = [
   "Best tacos near campus?",
@@ -306,6 +308,23 @@ interface ChatMessage {
   timestamp?: number;
 }
 
+type ReservationDraft = {
+  restaurantName: string;
+  reservationTime: string;
+  partySize: number;
+  specialRequest?: string;
+};
+
+type ReservationStatusRecord = {
+  jobId: string;
+  restaurantName: string;
+  reservationTime: string;
+  partySize: number;
+  status: string;
+  decision: string;
+  updatedAt: number;
+};
+
 type RecommendationMemory = {
   kind: "find" | "food";
   seedPrompt: string;
@@ -320,6 +339,98 @@ function isYesReply(input: string) {
 
 function isNoReply(input: string) {
   return /^(no|n|nope|nah|not now|skip)$/i.test(input.trim());
+}
+
+function isReservationIntent(input: string) {
+  const q = normalizeInput(input);
+  return /(make|book|get|set up|create|call).*(reservation|table)/.test(q)
+    || /(reservation|table).*(at|for)/.test(q);
+}
+
+function detectRestaurantName(input: string): string {
+  const q = normalizeInput(input);
+  const foodPlaces = places.filter((p) => FOOD_CATEGORIES.has(p.category));
+  const match = foodPlaces
+    .map((p) => p.name)
+    .sort((a, b) => b.length - a.length)
+    .find((name) => q.includes(normalizeInput(name)));
+  if (match) return match;
+
+  const atMatch = input.match(/\bat\s+([a-z0-9 '&.-]{2,})/i);
+  if (atMatch?.[1]) {
+    const cleaned = atMatch[1]
+      .replace(/\b(tonight|today|tomorrow)\b.*$/i, "")
+      .replace(/\bfor\s+\d+.*$/i, "")
+      .replace(/\bat\s+\d.*$/i, "")
+      .trim();
+    if (cleaned.length > 1) return cleaned;
+  }
+
+  const generic = input
+    .replace(/^(can you|could you|please)\s+/i, "")
+    .replace(/^(make|book|get|set up|create|call)\s+(me\s+)?(a\s+)?/i, "")
+    .replace(/\b(reservation|table)\b/gi, "")
+    .replace(/\b(at|for)\b.*/i, "")
+    .trim();
+
+  return generic.length > 1 ? generic : "";
+}
+
+function parsePartySize(input: string): number | null {
+  const forMatch = input.match(/\bfor\s+(\d{1,2})\b/i);
+  if (forMatch?.[1]) return Number(forMatch[1]);
+  const partyMatch = input.match(/\bparty\s+of\s+(\d{1,2})\b/i);
+  if (partyMatch?.[1]) return Number(partyMatch[1]);
+  return null;
+}
+
+function parseReservationTime(input: string): string | null {
+  const lower = normalizeInput(input);
+  const timeMatch = input.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i);
+  const hasTonight = /\btonight\b/.test(lower);
+  const hasTomorrow = /\btomorrow\b/.test(lower);
+  const hasToday = /\btoday\b/.test(lower);
+
+  if (timeMatch) {
+    const raw = timeMatch[0].toUpperCase();
+    if (hasTomorrow) return `Tomorrow ${raw}`;
+    if (hasTonight) return `Tonight ${raw}`;
+    if (hasToday) return `Today ${raw}`;
+    return `Tonight ${raw}`;
+  }
+
+  if (hasTomorrow) return "Tomorrow evening";
+  if (hasTonight) return "Tonight 7:00 PM";
+  if (hasToday) return "Today evening";
+  return null;
+}
+
+function parseSpecialRequest(input: string): string | undefined {
+  const lower = normalizeInput(input);
+  if (/outside|outdoor|patio/.test(lower)) return "Outdoor seating if possible";
+  if (/inside|indoor/.test(lower)) return "Indoor seating preferred";
+  if (/quiet/.test(lower)) return "Quiet table if available";
+  if (/window/.test(lower)) return "Window seat if available";
+  return undefined;
+}
+
+function buildReservationDraft(input: string): ReservationDraft | null {
+  const restaurantName = detectRestaurantName(input);
+  if (!restaurantName) return null;
+  return {
+    restaurantName,
+    reservationTime: parseReservationTime(input) || "Tonight 7:00 PM",
+    partySize: parsePartySize(input) || 2,
+    specialRequest: parseSpecialRequest(input),
+  };
+}
+
+function applyReservationEdits(draft: ReservationDraft, input: string): ReservationDraft {
+  const restaurantName = detectRestaurantName(input) || draft.restaurantName;
+  const reservationTime = parseReservationTime(input) || draft.reservationTime;
+  const partySize = parsePartySize(input) || draft.partySize;
+  const specialRequest = parseSpecialRequest(input) || draft.specialRequest;
+  return { restaurantName, reservationTime, partySize, specialRequest };
 }
 
 type ClarificationState = {
@@ -1098,6 +1209,23 @@ function saveMessages(msgs: ChatMessage[]) {
   } catch { /* noop */ }
 }
 
+function loadReservationStatuses(): ReservationStatusRecord[] {
+  try {
+    const raw = localStorage.getItem(RESERVATION_STATUS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function upsertReservationStatus(next: ReservationStatusRecord) {
+  const current = loadReservationStatuses();
+  const filtered = current.filter((item) => item.jobId !== next.jobId);
+  filtered.unshift(next);
+  localStorage.setItem(RESERVATION_STATUS_KEY, JSON.stringify(filtered.slice(0, 25)));
+}
+
 export function Jarvis() {
   const navigate = useNavigate();
   const prefs = useMemo(() => getUserPreferences(), []);
@@ -1121,7 +1249,11 @@ export function Jarvis() {
   const [awaitingRebalanceReply, setAwaitingRebalanceReply] = useState(false);
   const [clarification, setClarification] = useState<ClarificationState | null>(null);
   const [recommendationMemory, setRecommendationMemory] = useState<RecommendationMemory | null>(null);
+  const [pendingReservation, setPendingReservation] = useState<ReservationDraft | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const reservationPollRef = useRef<number | null>(null);
+  const reservationPollJobRef = useRef<string>("");
+  const reservationFinalNotifiedRef = useRef<Record<string, boolean>>({});
 
   // Persist messages whenever they change
   useEffect(() => {
@@ -1129,10 +1261,82 @@ export function Jarvis() {
   }, [messages]);
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, isTyping]);
+  useEffect(() => {
+    return () => {
+      if (reservationPollRef.current) {
+        window.clearInterval(reservationPollRef.current);
+        reservationPollRef.current = null;
+      }
+    };
+  }, []);
 
   const handleNavigate = useCallback((path: string) => {
     setTimeout(() => navigate(path), 100);
   }, [navigate]);
+
+  const startReservationPolling = useCallback((jobId: string, restaurantName: string) => {
+    if (reservationPollRef.current) {
+      window.clearInterval(reservationPollRef.current);
+      reservationPollRef.current = null;
+    }
+    reservationPollJobRef.current = jobId;
+
+    const run = () => {
+      apiFetch(`/api/agent/call/${jobId}`)
+        .then((data) => {
+          const job = data?.call_job;
+          if (!job) return;
+
+          const status = String(job.status || "").toLowerCase();
+          const decision = String(job.reservation_decision || "").toLowerCase();
+          upsertReservationStatus({
+            jobId,
+            restaurantName: job.restaurant_name || restaurantName,
+            reservationTime: job.reservation_time || "",
+            partySize: Number(job.party_size || 0),
+            status,
+            decision,
+            updatedAt: Date.now(),
+          });
+
+          const isFinal =
+            decision === "confirmed" ||
+            decision === "declined" ||
+            decision === "declined-timeout" ||
+            status === "reservation-confirmed" ||
+            status === "reservation-declined" ||
+            status === "reservation-timeout" ||
+            status === "failed";
+
+          if (!isFinal || reservationFinalNotifiedRef.current[jobId]) return;
+
+          reservationFinalNotifiedRef.current[jobId] = true;
+          let text = `Reservation update for ${job.restaurant_name || restaurantName}: still in progress.`;
+          if (decision === "confirmed" || status === "reservation-confirmed") {
+            text = `Reservation confirmed at ${job.restaurant_name || restaurantName} for ${job.party_size || "?"} at ${job.reservation_time || "requested time"}.`;
+          } else if (decision === "declined" || status === "reservation-declined") {
+            text = `Reservation declined by ${job.restaurant_name || restaurantName}. Want me to try a different time?`;
+          } else if (decision === "declined-timeout" || status === "reservation-timeout") {
+            text = `No confirmation input received from ${job.restaurant_name || restaurantName}. Want me to retry with another time?`;
+          } else if (status === "failed") {
+            text = `The call to ${job.restaurant_name || restaurantName} failed. ${job.last_error ? `Reason: ${job.last_error}` : ""}`.trim();
+          }
+
+          setMessages((prev) => [...prev, { role: "assistant", text, timestamp: Date.now() }]);
+
+          if (reservationPollRef.current && reservationPollJobRef.current === jobId) {
+            window.clearInterval(reservationPollRef.current);
+            reservationPollRef.current = null;
+          }
+        })
+        .catch(() => {
+          // Keep polling; transient errors are common while backend updates call state.
+        });
+    };
+
+    run();
+    reservationPollRef.current = window.setInterval(run, 7000);
+  }, []);
 
   const sendMessage = useCallback((text: string) => {
     if (!text.trim()) return;
@@ -1141,6 +1345,100 @@ export function Jarvis() {
     setMessages(prev => [...prev, userMsg]);
     setInput("");
     setIsTyping(true);
+
+    if (pendingReservation) {
+      const yes = isYesReply(prompt);
+      const no = isNoReply(prompt);
+
+      if (yes) {
+        apiFetch("/api/agent/call/start", {
+          method: "POST",
+          body: {
+            restaurant_name: pendingReservation.restaurantName,
+            reservation_time: pendingReservation.reservationTime,
+            party_size: pendingReservation.partySize,
+            special_request: pendingReservation.specialRequest || "",
+            group_id: "creator-only",
+          },
+        })
+          .then((data) => {
+            const job = data?.call_job;
+            setIsTyping(false);
+            setPendingReservation(null);
+            if (job?.job_id) {
+              upsertReservationStatus({
+                jobId: job.job_id,
+                restaurantName: pendingReservation.restaurantName,
+                reservationTime: pendingReservation.reservationTime,
+                partySize: pendingReservation.partySize,
+                status: String(job?.status || "queued"),
+                decision: String(job?.reservation_decision || "pending"),
+                updatedAt: Date.now(),
+              });
+              startReservationPolling(job.job_id, pendingReservation.restaurantName);
+            }
+            setMessages((prev) => [
+              ...prev,
+              {
+                role: "assistant",
+                text: `Calling ${pendingReservation.restaurantName} now.\n\nReservation: ${pendingReservation.partySize} people at ${pendingReservation.reservationTime}.\n\nCall job: ${job?.job_id || "created"} (${job?.status || "started"}).\n\nI'll update you here when it is confirmed or declined.`,
+                timestamp: Date.now(),
+              },
+            ]);
+          })
+          .catch((error) => {
+            setIsTyping(false);
+            const errText = error instanceof Error ? error.message : "Could not start reservation call.";
+            const authHint = /session token/i.test(errText)
+              ? "\n\nYour session expired. Sign in again, then retry."
+              : "";
+            setMessages((prev) => [
+              ...prev,
+              {
+                role: "assistant",
+                text: `I couldn't place the call yet: ${errText}${authHint}`,
+                timestamp: Date.now(),
+              },
+            ]);
+          });
+        return;
+      }
+
+      if (no) {
+        const msg = "No problem. I canceled that reservation call draft.";
+        const delay = Math.min(260 + msg.length, 650);
+        setTimeout(() => {
+          setIsTyping(false);
+          setPendingReservation(null);
+          setMessages((prev) => [...prev, { role: "assistant", text: msg, timestamp: Date.now() }]);
+        }, delay);
+        return;
+      }
+
+      const updatedDraft = applyReservationEdits(pendingReservation, prompt);
+      const confirmText = `Updated.\n\nI can call ${updatedDraft.restaurantName} for ${updatedDraft.partySize} at ${updatedDraft.reservationTime}${updatedDraft.specialRequest ? ` (${updatedDraft.specialRequest})` : ""}.\n\nReply YES to place the call, NO to cancel, or send edits (example: "for 4 at 8:30 PM").`;
+      const delay = Math.min(260 + confirmText.length, 760);
+      setTimeout(() => {
+        setIsTyping(false);
+        setPendingReservation(updatedDraft);
+        setMessages((prev) => [...prev, { role: "assistant", text: confirmText, timestamp: Date.now() }]);
+      }, delay);
+      return;
+    }
+
+    if (isReservationIntent(prompt)) {
+      const draft = buildReservationDraft(prompt);
+      const reply = draft
+        ? `I can call ${draft.restaurantName} and request a reservation for ${draft.partySize} at ${draft.reservationTime}${draft.specialRequest ? ` (${draft.specialRequest})` : ""}.\n\nReply YES to place the call, NO to cancel, or edit details (example: "for 4 at 8:30 PM").`
+        : `I can do that. Tell me the place first.\n\nExample: "make me a reservation at Firestone for 2 at 7:30 PM".`;
+      const delay = Math.min(260 + reply.length, 760);
+      setTimeout(() => {
+        setIsTyping(false);
+        if (draft) setPendingReservation(draft);
+        setMessages((prev) => [...prev, { role: "assistant", text: reply, timestamp: Date.now() }]);
+      }, delay);
+      return;
+    }
 
     if (awaitingRebalanceReply) {
       const lower = prompt.toLowerCase();
@@ -1379,7 +1677,7 @@ export function Jarvis() {
       }
       setMessages(prev => [...prev, botMsg]);
     }, delay);
-  }, [awaitingRebalanceReply]);
+  }, [awaitingRebalanceReply, pendingReservation]);
 
   const handleSend = () => {
     sendMessage(input);

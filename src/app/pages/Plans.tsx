@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useNavigate } from "react-router";
 import { toast } from "sonner";
 import { motion, AnimatePresence } from "motion/react";
@@ -9,6 +9,17 @@ import { BottomNav } from "../components/BottomNav";
 import { PageHeader } from "../components/PageHeader";
 import { MustangIcon } from "../components/MustangIcon";
 import { Plus, Share2, Trash2, MapPin, Clock, ArrowLeft, X, ChevronRight, Search, Compass, Users, PenLine, ChevronDown, Pin } from "lucide-react";
+const RESERVATION_STATUS_KEY = "polyjarvis_reservation_statuses";
+
+type ReservationStatusRecord = {
+  jobId: string;
+  restaurantName: string;
+  reservationTime: string;
+  partySize: number;
+  status: string;
+  decision: string;
+  updatedAt: number;
+};
 
 type EventSource = "custom" | "explore" | "jam";
 
@@ -91,6 +102,22 @@ export function Plans() {
   const [exploreSearch, setExploreSearch] = useState("");
   const [selectedPlaceId, setSelectedPlaceId] = useState<string | null>(null);
   const [selectedJamId, setSelectedJamId] = useState<string | null>(null);
+  const [reservationStatuses, setReservationStatuses] = useState<ReservationStatusRecord[]>([]);
+
+  useEffect(() => {
+    const load = () => {
+      try {
+        const raw = localStorage.getItem(RESERVATION_STATUS_KEY);
+        const parsed = raw ? JSON.parse(raw) : [];
+        setReservationStatuses(Array.isArray(parsed) ? parsed : []);
+      } catch {
+        setReservationStatuses([]);
+      }
+    };
+    load();
+    window.addEventListener("focus", load);
+    return () => window.removeEventListener("focus", load);
+  }, []);
 
   const generateCode = () => {
     const words = ["PLAN", "TRIP", "OUTING", "ROUTE"];
@@ -205,6 +232,40 @@ export function Plans() {
                 <p className="text-[10px] text-white/25 font-bold mt-0.5 uppercase tracking-wider">BUILD YOUR DAY AS A FLOWCHART</p>
               </div>
             </div>
+            {reservationStatuses.length > 0 && (
+              <div className="mt-3 rounded-xl border border-white/12 bg-white/10 p-3">
+                <p className="text-[10px] font-black tracking-widest uppercase text-white/45 mb-2">Latest Reservation Calls</p>
+                <div className="space-y-2">
+                  {reservationStatuses.slice(0, 2).map((item) => {
+                    const statusText =
+                      item.decision === "confirmed" || item.status === "reservation-confirmed"
+                        ? "Confirmed"
+                        : item.decision === "declined" || item.status === "reservation-declined"
+                          ? "Declined"
+                          : item.status === "failed"
+                            ? "Failed"
+                            : "In Progress";
+                    const statusClass =
+                      statusText === "Confirmed"
+                        ? "text-[#8BC34A] bg-[#8BC34A]/15 border-[#8BC34A]/35"
+                        : statusText === "Declined" || statusText === "Failed"
+                          ? "text-red-300 bg-red-500/10 border-red-400/25"
+                          : "text-[#F2E8CF] bg-[#F2E8CF]/10 border-[#F2E8CF]/25";
+                    return (
+                      <div key={item.jobId} className="flex items-center justify-between gap-2 rounded-lg bg-black/20 border border-white/8 p-2.5">
+                        <div className="min-w-0">
+                          <p className="text-xs font-bold text-white truncate">{item.restaurantName}</p>
+                          <p className="text-[11px] text-white/50 truncate">{item.partySize || 2} people • {item.reservationTime || "requested time"}</p>
+                        </div>
+                        <span className={`shrink-0 text-[10px] font-black uppercase tracking-wide border rounded-full px-2 py-1 ${statusClass}`}>
+                          {statusText}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             {/* Tabs */}
             <div className="flex gap-1 mt-3 bg-white/5 rounded-xl p-1">
               <button
