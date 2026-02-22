@@ -7,6 +7,9 @@
     "dev": "sh -c 'node backend/server.js & BACK_PID=$!; trap \"kill $BACK_PID\" EXIT; vite'",
     "dev:frontend": "vite",
     "backend": "node backend/server.js",
+    "jarvis:autofeed": "node scripts/jarvis-autofeed.mjs",
+    "jarvis:train": "node scripts/jarvis-train-1000.mjs",
+    "jarvis:train:5x": "node scripts/jarvis-train-1000.mjs --rounds 5 --count 1000",
     "build": "vite build",
     "preview": "vite preview"
   },

@@ -13,6 +13,7 @@ import { apiFetch } from "../../lib/apiClient";
 const MESSAGES_KEY = "polyjarvis_chat_history";
 const HOME_LOCATION_KEY = "polyjarvis_home_location";
 const RESERVATION_STATUS_KEY = "polyjarvis_reservation_statuses";
+const USER_ID_KEY = "slo_user_id";
 
 const promptPills = [
   "Best tacos near campus?",
@@ -295,14 +296,18 @@ function pickFindVariation(seed: string) {
 type NavAction = { type: "navigate"; path: string; label: string } | null;
 
 interface JarvisAction {
-  type: "pin" | "jam" | "plan";
+  type: "pin" | "jam" | "plan" | "confirm_action";
   label: string;
+  actionId?: string;
+  actionType?: string;
+  payload?: any;
   data?: any;
 }
 
 interface ChatMessage {
   role: "user" | "assistant";
   text: string;
+  imageUrl?: string;
   action?: NavAction;
   jarvisActions?: JarvisAction[];
   timestamp?: number;
@@ -345,6 +350,29 @@ function isReservationIntent(input: string) {
   const q = normalizeInput(input);
   return /(make|book|get|set up|create|call).*(reservation|table)/.test(q)
     || /(reservation|table).*(at|for)/.test(q);
+}
+
+function isImageGenerationIntent(input: string) {
+  const q = normalizeInput(input);
+  return /(^|\s)(generate|make|create|draw|design)\b.*\b(image|picture|photo|art|poster|logo|wallpaper)\b/.test(q)
+    || /(^|\s)(image|picture|photo)\b.*\b(of|for)\b/.test(q)
+    || q.startsWith("/image ");
+}
+
+function extractImagePrompt(input: string) {
+  const trimmed = input.trim();
+  if (/^\/image\s+/i.test(trimmed)) {
+    return trimmed.replace(/^\/image\s+/i, "").trim();
+  }
+  const ofMatch = trimmed.match(/\b(?:image|picture|photo|art|poster|logo|wallpaper)\s+(?:of|for)\s+(.+)$/i);
+  if (ofMatch?.[1]) return ofMatch[1].trim();
+
+  return trimmed
+    .replace(/\b(generate|make|create|draw|design)\b/gi, "")
+    .replace(/\b(an?|the)\b/gi, "")
+    .replace(/\b(image|picture|photo|art|poster|logo|wallpaper)\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function detectRestaurantName(input: string): string {
@@ -1189,10 +1217,81 @@ function findResponse(input: string): { text: string; action?: NavAction; jarvis
   return { text: "I don't have that one yet. Try asking about food, hikes, coffee, beaches — or say \"help\" for the full list." };
 }
 
+function getTimeOfDayLabel() {
+  const hour = new Date().getHours();
+  if (hour < 12) return "morning";
+  if (hour < 17) return "afternoon";
+  if (hour < 21) return "evening";
+  return "night";
+}
+
+function buildAgentContextPayload() {
+  let pinnedCount = 0;
+  let myEventsCount = 0;
+  try {
+    const pinnedRaw = localStorage.getItem("pinnedEvents");
+    if (pinnedRaw) pinnedCount = JSON.parse(pinnedRaw).length || 0;
+  } catch {
+    pinnedCount = 0;
+  }
+  try {
+    const eventsRaw = localStorage.getItem("polyjarvis_my_events");
+    if (eventsRaw) myEventsCount = JSON.parse(eventsRaw).length || 0;
+  } catch {
+    myEventsCount = 0;
+  }
+
+  return {
+    weather: "clear",
+    timeOfDay: getTimeOfDayLabel(),
+    activeScreen: "/jarvis",
+    localSignals: {
+      pinnedCount,
+      myEventsCount
+    }
+  };
+}
+
+function formatAgentCards(cards: any[]) {
+  if (!Array.isArray(cards) || cards.length === 0) return "";
+  const lines = cards.slice(0, 3).map((card: any, index: number) => {
+    const title = String(card?.title || "Option");
+    const subtitle = String(card?.subtitle || "").trim();
+    const tags = Array.isArray(card?.reason_tags) ? card.reason_tags.slice(0, 2).join(", ") : "";
+    return `${index + 1}. ${title}${subtitle ? ` — ${subtitle}` : ""}${tags ? ` (${tags})` : ""}`;
+  });
+  return `\n\nTop picks:\n${lines.join("\n")}`;
+}
+
+function mapProposedActionsToJarvisActions(proposedActions: any[]): JarvisAction[] {
+  if (!Array.isArray(proposedActions)) return [];
+  return proposedActions.slice(0, 4).map((action: any) => {
+    const type = String(action?.type || "");
+    const fallback = "Confirm action";
+    const labelByType: Record<string, string> = {
+      create_plan_draft: "Create plan draft",
+      rsvp_event: "RSVP now",
+      join_jam: "Join jam",
+      add_study_task: "Add task",
+      create_booking_intent: "Create booking intent",
+    };
+    return {
+      type: "confirm_action",
+      label: labelByType[type] || fallback,
+      actionId: String(action?.action_id || ""),
+      actionType: type,
+      payload: action?.payload || null,
+    };
+  }).filter((item) => Boolean(item.actionId));
+}
+
 // ─── Chat persistence helpers ───────────────────────────────────────────────
 function loadMessages(): ChatMessage[] {
+  const userId = localStorage.getItem(USER_ID_KEY);
+  if (!userId) return [];
+  const scopedKey = `${MESSAGES_KEY}:${userId}`;
   try {
-    const raw = localStorage.getItem(MESSAGES_KEY);
+    const raw = localStorage.getItem(scopedKey);
     if (raw) {
       const parsed = JSON.parse(raw) as ChatMessage[];
       if (Array.isArray(parsed) && parsed.length > 0) return parsed;
@@ -1202,10 +1301,13 @@ function loadMessages(): ChatMessage[] {
 }
 
 function saveMessages(msgs: ChatMessage[]) {
+  const userId = localStorage.getItem(USER_ID_KEY);
+  if (!userId) return;
+  const scopedKey = `${MESSAGES_KEY}:${userId}`;
   try {
     // Keep last 100 messages to avoid localStorage bloat
     const trimmed = msgs.slice(-100);
-    localStorage.setItem(MESSAGES_KEY, JSON.stringify(trimmed));
+    localStorage.setItem(scopedKey, JSON.stringify(trimmed));
   } catch { /* noop */ }
 }
 
@@ -1224,6 +1326,53 @@ function upsertReservationStatus(next: ReservationStatusRecord) {
   const filtered = current.filter((item) => item.jobId !== next.jobId);
   filtered.unshift(next);
   localStorage.setItem(RESERVATION_STATUS_KEY, JSON.stringify(filtered.slice(0, 25)));
+}
+
+async function recoverBackendSessionToken(forceRenew = false): Promise<string | null> {
+  if (forceRenew) {
+    localStorage.removeItem("slo_session_token");
+  } else {
+    const existing = localStorage.getItem("slo_session_token");
+    if (existing) return existing;
+  }
+
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const credentials = {
+    email: `guest-${suffix}@guest.local`,
+    password: `guest-${Math.random().toString(36).slice(2, 12)}`,
+    displayName: "Guest",
+    phone: "+15555550100",
+  };
+
+  try {
+    const data = await apiFetch("/api/auth/signup", {
+      method: "POST",
+      withAuth: false,
+      body: credentials,
+    });
+    if (data?.sessionToken) {
+      localStorage.setItem("slo_session_token", data.sessionToken);
+      return data.sessionToken;
+    }
+  } catch {
+    // fallback below
+  }
+
+  try {
+    const data = await apiFetch("/api/auth/signin", {
+      method: "POST",
+      withAuth: false,
+      body: { email: credentials.email, password: credentials.password },
+    });
+    if (data?.sessionToken) {
+      localStorage.setItem("slo_session_token", data.sessionToken);
+      return data.sessionToken;
+    }
+  } catch {
+    // ignore
+  }
+
+  return null;
 }
 
 export function Jarvis() {
@@ -1261,6 +1410,18 @@ export function Jarvis() {
   }, [messages]);
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, isTyping]);
+  useEffect(() => {
+    const syncHistoryFromAuth = () => {
+      const saved = loadMessages();
+      if (saved.length > 0) {
+        setMessages(saved);
+        return;
+      }
+      setMessages([{ role: "assistant", text: initialGreeting, timestamp: Date.now() }]);
+    };
+    window.addEventListener("slo-auth-changed", syncHistoryFromAuth);
+    return () => window.removeEventListener("slo-auth-changed", syncHistoryFromAuth);
+  }, [initialGreeting]);
   useEffect(() => {
     return () => {
       if (reservationPollRef.current) {
@@ -1351,16 +1512,37 @@ export function Jarvis() {
       const no = isNoReply(prompt);
 
       if (yes) {
-        apiFetch("/api/agent/call/start", {
-          method: "POST",
-          body: {
-            restaurant_name: pendingReservation.restaurantName,
-            reservation_time: pendingReservation.reservationTime,
-            party_size: pendingReservation.partySize,
-            special_request: pendingReservation.specialRequest || "",
-            group_id: "creator-only",
-          },
-        })
+        const startCall = async () => {
+          try {
+            return await apiFetch("/api/agent/call/start", {
+              method: "POST",
+              body: {
+                restaurant_name: pendingReservation.restaurantName,
+                reservation_time: pendingReservation.reservationTime,
+                party_size: pendingReservation.partySize,
+                special_request: pendingReservation.specialRequest || "",
+                group_id: "creator-only",
+              },
+            });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "";
+            if (!/session token/i.test(message)) throw error;
+            const recovered = await recoverBackendSessionToken(true);
+            if (!recovered) throw error;
+            return apiFetch("/api/agent/call/start", {
+              method: "POST",
+              body: {
+                restaurant_name: pendingReservation.restaurantName,
+                reservation_time: pendingReservation.reservationTime,
+                party_size: pendingReservation.partySize,
+                special_request: pendingReservation.specialRequest || "",
+                group_id: "creator-only",
+              },
+            });
+          }
+        };
+
+        startCall()
           .then((data) => {
             const job = data?.call_job;
             setIsTyping(false);
@@ -1389,14 +1571,11 @@ export function Jarvis() {
           .catch((error) => {
             setIsTyping(false);
             const errText = error instanceof Error ? error.message : "Could not start reservation call.";
-            const authHint = /session token/i.test(errText)
-              ? "\n\nYour session expired. Sign in again, then retry."
-              : "";
             setMessages((prev) => [
               ...prev,
               {
                 role: "assistant",
-                text: `I couldn't place the call yet: ${errText}${authHint}`,
+                text: `I couldn't place the call yet: ${errText}`,
                 timestamp: Date.now(),
               },
             ]);
@@ -1423,6 +1602,48 @@ export function Jarvis() {
         setPendingReservation(updatedDraft);
         setMessages((prev) => [...prev, { role: "assistant", text: confirmText, timestamp: Date.now() }]);
       }, delay);
+      return;
+    }
+
+    if (isImageGenerationIntent(prompt)) {
+      const imagePrompt = extractImagePrompt(prompt);
+      if (!imagePrompt) {
+        const text = "Tell me what image you want. Example: /image cinematic sunset over Morro Rock.";
+        setTimeout(() => {
+          setIsTyping(false);
+          setMessages((prev) => [...prev, { role: "assistant", text, timestamp: Date.now() }]);
+        }, 260);
+        return;
+      }
+
+      apiFetch("/api/agent/image-generate", {
+        method: "POST",
+        body: { prompt: imagePrompt, size: "1024x1024" },
+      })
+        .then((data) => {
+          setIsTyping(false);
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: "assistant",
+              text: `Generated image for: ${imagePrompt}`,
+              imageUrl: data?.image_url || "",
+              timestamp: Date.now(),
+            },
+          ]);
+        })
+        .catch((error) => {
+          setIsTyping(false);
+          const errText = error instanceof Error ? error.message : "Could not generate image.";
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: "assistant",
+              text: `Image generation failed: ${errText}`,
+              timestamp: Date.now(),
+            },
+          ]);
+        });
       return;
     }
 
@@ -1661,22 +1882,71 @@ export function Jarvis() {
       return;
     }
 
-    const response = findResponse(text);
-    const delay = Math.min(300 + response.text.length * 1.2, 800);
-    setTimeout(() => {
-      setIsTyping(false);
-      const botMsg: ChatMessage = {
-        role: "assistant",
-        text: response.text,
-        action: response.action,
-        jarvisActions: response.jarvisActions,
-        timestamp: Date.now(),
-      };
-      if (/re-balance this for lower stress or stricter deadline mode/i.test(botMsg.text)) {
-        setAwaitingRebalanceReply(true);
+    const runAgentFallback = async () => {
+      try {
+        let data;
+        try {
+          data = await apiFetch("/api/agent/chat", {
+            method: "POST",
+            body: {
+              message: prompt,
+              context: buildAgentContextPayload(),
+            },
+          });
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : "";
+          if (!/session token/i.test(msg)) throw error;
+          const recovered = await recoverBackendSessionToken(true);
+          if (!recovered) throw error;
+          data = await apiFetch("/api/agent/chat", {
+            method: "POST",
+            body: {
+              message: prompt,
+              context: buildAgentContextPayload(),
+            },
+          });
+        }
+        const assistantText = String(data?.assistant_text || "").trim();
+        const cards = Array.isArray(data?.cards) ? data.cards : [];
+        const jarvisActions = mapProposedActionsToJarvisActions(data?.proposed_actions || []);
+        const firstDeepLink = String(cards[0]?.deep_link || "");
+        const navAction: NavAction = firstDeepLink
+          ? { type: "navigate", path: firstDeepLink, label: "Open top pick" }
+          : null;
+
+        const textOut = `${assistantText || "I analyzed your app data and generated next steps."}${formatAgentCards(cards)}`;
+        setIsTyping(false);
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            text: textOut,
+            action: navAction,
+            jarvisActions,
+            timestamp: Date.now(),
+          },
+        ]);
+      } catch {
+        const response = findResponse(text);
+        const delay = Math.min(300 + response.text.length * 1.2, 800);
+        setTimeout(() => {
+          setIsTyping(false);
+          const botMsg: ChatMessage = {
+            role: "assistant",
+            text: response.text,
+            action: response.action,
+            jarvisActions: response.jarvisActions,
+            timestamp: Date.now(),
+          };
+          if (/re-balance this for lower stress or stricter deadline mode/i.test(botMsg.text)) {
+            setAwaitingRebalanceReply(true);
+          }
+          setMessages(prev => [...prev, botMsg]);
+        }, delay);
       }
-      setMessages(prev => [...prev, botMsg]);
-    }, delay);
+    };
+
+    void runAgentFallback();
   }, [awaitingRebalanceReply, pendingReservation]);
 
   const handleSend = () => {
@@ -1714,6 +1984,55 @@ export function Jarvis() {
         navigate("/explore");
         toast.success("Opening Explore — tap the pin icon to save.");
         break;
+      case "confirm_action": {
+        if (!action.actionId) {
+          toast.error("Missing action id.");
+          return;
+        }
+        setIsTyping(true);
+        apiFetch(`/api/agent/actions/${action.actionId}/confirm`, {
+          method: "POST",
+          body: {},
+        })
+          .then((data) => {
+            const result = data?.result || {};
+            const actionType = String(data?.action_type || action.actionType || "action");
+            let text = `Confirmed: ${actionType}.`;
+            let nav: NavAction = null;
+
+            if (result?.deep_link) {
+              nav = { type: "navigate", path: String(result.deep_link), label: "Open result" };
+            }
+            if (result?.plan_id) {
+              text = `Plan draft created. Plan ID: ${result.plan_id}.`;
+              nav = { type: "navigate", path: `/plans/${result.plan_id}`, label: "Open plan" };
+            } else if (result?.task_id) {
+              text = `Task added: ${result.title || "New task"}.`;
+              nav = { type: "navigate", path: "/deadlines", label: "Open assignments" };
+            } else if (result?.event_id) {
+              text = `Event updated: ${result.state} for ${result.event_id}.`;
+              nav = { type: "navigate", path: "/myevents", label: "Open My Events" };
+            } else if (result?.provider && result?.deep_link) {
+              text = `Booking intent created with ${result.provider}. Complete the final step in provider flow.`;
+              nav = { type: "navigate", path: "/plans", label: "Open Plans" };
+              window.open(String(result.deep_link), "_blank", "noopener,noreferrer");
+            }
+
+            setMessages((prev) => [
+              ...prev,
+              { role: "assistant", text, action: nav, timestamp: Date.now() },
+            ]);
+          })
+          .catch((error) => {
+            const message = error instanceof Error ? error.message : "Could not confirm action.";
+            setMessages((prev) => [
+              ...prev,
+              { role: "assistant", text: `Couldn't confirm that action: ${message}`, timestamp: Date.now() },
+            ]);
+          })
+          .finally(() => setIsTyping(false));
+        break;
+      }
     }
   };
 
@@ -1762,6 +2081,14 @@ export function Jarvis() {
                   : "bg-white/10 text-white/90 border border-white/10 rounded-bl-sm"
               }`}>
                 {msg.text}
+                {msg.imageUrl && (
+                  <img
+                    src={msg.imageUrl}
+                    alt="Generated by Jarvis"
+                    className="mt-2 rounded-xl border border-white/15 w-full max-w-[320px] object-cover"
+                    loading="lazy"
+                  />
+                )}
               </div>
             </div>
             {/* Navigation action */}
