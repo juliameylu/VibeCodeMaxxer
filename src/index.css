@@ -3,21 +3,25 @@
 @tailwind utilities;
 
 :root {
-  --bg-top: #dcefdc;
-  --bg-mid: #b8d8bf;
-  --bg-bottom: #d1e7d4;
+  --app-frame-width: 520px;
+  --app-frame-left-offset: 0px;
+  --app-frame-right-offset: 0px;
+  --app-nav-bottom-offset: 0px;
+  --bg-top: #eef9ea;
+  --bg-mid: #d9efdd;
+  --bg-bottom: #f0f8f2;
   --card-blur: 16px;
-  --body-text: rgba(215, 236, 210, 0.84);
+  --body-text: rgba(38, 76, 49, 0.74);
 }
 
 body {
-  color: #e8f5e6;
+  color: #173225;
   font-family:
     "Avenir Next",
     "Nunito",
     "Segoe UI",
     sans-serif;
-  background: linear-gradient(180deg, #0a2a0d 0%, #0d3413 45%, #0b270f 100%);
+  background: linear-gradient(180deg, var(--bg-top) 0%, var(--bg-mid) 45%, var(--bg-bottom) 100%);
   min-height: 100vh;
 }
 
@@ -33,9 +37,7 @@ body::before {
 
 #root {
   width: 100%;
-  max-width: 520px;
   min-height: 100vh;
-  margin: 0 auto;
 }
 @keyframes fadeIn {
   from {
@@ -89,23 +91,23 @@ body::before {
 
   .phone-shell {
     @apply relative mx-auto w-full max-w-[430px] rounded-[28px] border p-4 pb-28 shadow-phone;
-    border-color: rgba(141, 235, 118, 0.2);
-    background: radial-gradient(circle at 15% 0%, rgba(129, 255, 91, 0.2), transparent 28%),
-      linear-gradient(180deg, #07310c 0%, #07280b 100%);
+    border-color: rgba(121, 187, 132, 0.35);
+    background: radial-gradient(circle at 15% 0%, rgba(159, 236, 160, 0.3), transparent 30%),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.86) 0%, rgba(236, 248, 237, 0.84) 100%);
     backdrop-filter: blur(10px);
   }
 
   .glass-card {
     @apply rounded-[24px] border shadow-sm;
-    border-color: rgba(149, 255, 109, 0.2);
-    background: rgba(27, 66, 31, 0.72);
+    border-color: rgba(146, 197, 149, 0.42);
+    background: rgba(250, 255, 250, 0.78);
     backdrop-filter: blur(var(--card-blur));
   }
 
   .row-pill {
     @apply rounded-[20px] border px-4 py-3;
-    border-color: rgba(149, 255, 109, 0.2);
-    background: rgba(20, 57, 24, 0.78);
+    border-color: rgba(150, 200, 155, 0.4);
+    background: rgba(248, 255, 248, 0.85);
   }
 
   .chip {
@@ -119,8 +121,8 @@ body::before {
   }
 
   .chip-idle {
-    border: 1px solid rgba(149, 255, 109, 0.3);
-    background: rgba(126, 248, 83, 0.1);
-    color: #b9e6a7;
+    border: 1px solid rgba(134, 184, 140, 0.42);
+    background: rgba(245, 255, 246, 0.82);
+    color: #315a3a;
   }
 }

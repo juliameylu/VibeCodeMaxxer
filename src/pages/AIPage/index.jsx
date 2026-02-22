@@ -13,8 +13,40 @@ const NAV_ITEMS = [
   { to: "/profile", label: "Profile", icon: UserRound }
 ];
 
+function parseJson(raw, fallback) {
+  if (!raw) return fallback;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
+}
+
+function buildAgentContext() {
+  const tasks = parseJson(localStorage.getItem("polyjarvis_tasks"), []);
+  const prefs = parseJson(localStorage.getItem("polyjarvis_prefs"), {});
+  const plans = parseJson(localStorage.getItem("polyjarvis_plans"), []);
+  const pendingTasks = tasks.filter((task) => !task.done).length;
+  const priorityTasks = tasks.filter((task) => task.priority && !task.done).length;
+
+  return {
+    activeScreen: "ai",
+    weather: "clear",
+    timeOfDay: "evening",
+    study_load_score: priorityTasks * 3 + pendingTasks * 2,
+    preferences: {
+      categories: Array.isArray(prefs.categories) ? prefs.categories : [],
+      vibe: prefs.vibe || "chill",
+      budget: prefs.budget || "medium",
+      transport: prefs.transport || "walk"
+    },
+    upcoming_plans: Array.isArray(plans) ? plans.slice(0, 5) : []
+  };
+}
+
 export default function AIPage() {
   const [message, setMessage] = useState("");
+  const [chatId, setChatId] = useState("");
   const [assistantText, setAssistantText] = useState("");
   const [cards, setCards] = useState([]);
   const [actions, setActions] = useState([]);
@@ -39,10 +71,11 @@ export default function AIPage() {
         method: "POST",
         body: {
           message,
-          context: { activeScreen: "ai", weather: "clear", timeOfDay: "evening" },
+          context: buildAgentContext(),
           chips: CHIPS
         }
       });
+      setChatId(data.chat_id || "");
       setAssistantText(data.assistant_text || "");
       setCards(data.cards || []);
       setActions(data.proposed_actions || []);
@@ -56,11 +89,35 @@ export default function AIPage() {
 
   const confirmAction = async (actionId) => {
     try {
-      const data = await apiFetch(`/api/agent/actions/${actionId}/confirm`, { method: "POST", body: {} });
+      const data = await apiFetch(`/api/agent/actions/${actionId}/confirm`, {
+        method: "POST",
+        body: { chat_id: chatId || undefined }
+      });
       setStatus(`Confirmed ${data.action_type}`);
       setActions((prev) => prev.filter((item) => item.action_id !== actionId));
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Could not confirm action.");
+    }
+  };
+
+  const submitFeedback = async (signal) => {
+    if (!chatId) {
+      setStatus("No chat id yet. Send a message first.");
+      return;
+    }
+
+    try {
+      await apiFetch("/api/agent/feedback", {
+        method: "POST",
+        body: {
+          chat_id: chatId,
+          signal,
+          card_ids: cards.map((card) => card.id).filter(Boolean)
+        }
+      });
+      setStatus(signal === "helpful" ? "Feedback saved: Helpful" : "Feedback saved: Not a fit");
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Could not save feedback.");
     }
   };
 
@@ -88,9 +145,25 @@ export default function AIPage() {
             </article>
 
             {assistantText ? (
-              <article className="rounded-[22px] border border-[#95ff6d3d] bg-[#d4ffc61a] px-5 py-4 text-[11px] font-medium text-[#e5ffda]">
-                {assistantText}
-              </article>
+              <div className="space-y-2">
+                <article className="rounded-[22px] border border-[#95ff6d3d] bg-[#d4ffc61a] px-5 py-4 text-[11px] font-medium text-[#e5ffda]">
+                  {assistantText}
+                </article>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => submitFeedback("helpful")}
+                    className="rounded-full border border-[#a9ff803d] bg-[#8ff45129] px-3 py-1 text-[10px] font-bold text-[#a8f774]"
+                  >
+                    Helpful
+                  </button>
+                  <button
+                    onClick={() => submitFeedback("not_fit")}
+                    className="rounded-full border border-white/20 bg-white/10 px-3 py-1 text-[10px] font-bold text-white/70"
+                  >
+                    Not a fit
+                  </button>
+                </div>
+              </div>
             ) : null}
 
             {cards.map((card) => (

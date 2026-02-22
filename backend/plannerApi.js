@@ -2,6 +2,9 @@ import OpenAI from "openai";
 import { randomUUID } from "crypto";
 
 let openai = null;
+const AI_CACHE_TTL_MS = 1000 * 60 * 2;
+const AI_TIMEOUT_MS = 3200;
+const aiResponseCache = new Map();
 
 const NOW = () => new Date();
 
@@ -222,19 +225,69 @@ function scoreEvent({ event, prefs, studyLoad, weather = "clear", timeOfDay = "e
   return score + Math.max(0, 5 - event.distanceMiles);
 }
 
-function rankedRecommendations(userId, { weather = "clear", timeOfDay = "evening" } = {}) {
+function rankedRecommendations(
+  userId,
+  { weather = "clear", timeOfDay = "evening", requestedCategories = [], strictCategoryMatch = false } = {}
+) {
   const prefs = getOrInitPreferences(userId);
   const studyLoad = computeStudyLoad(userId);
+  const categorySet = new Set(requestedCategories);
 
   return store.eventsCatalog
     .map((event) => ({
       ...event,
-      score: scoreEvent({ event, prefs, studyLoad, weather, timeOfDay }),
+      score:
+        scoreEvent({ event, prefs, studyLoad, weather, timeOfDay }) +
+        (categorySet.size > 0
+          ? categorySet.has(event.category)
+            ? 12
+            : strictCategoryMatch
+              ? -30
+              : -8
+          : 0),
       study_load_score: studyLoad.study_load_score,
       reason_tags: [...event.reasonTags, `study-score-${studyLoad.study_load_score}`]
     }))
     .sort((a, b) => b.score - a.score)
     .slice(0, 8);
+}
+
+function parseMessageIntent(message) {
+  const text = String(message || "").toLowerCase();
+  const matches = [];
+
+  const rules = [
+    { category: "outdoor", keywords: ["hike", "hiking", "trail", "mountain", "peak", "beach", "surf", "sunset"] },
+    { category: "food", keywords: ["food", "eat", "dinner", "lunch", "breakfast", "coffee", "cafe", "restaurant", "taco"] },
+    { category: "concerts", keywords: ["concert", "music", "live show", "show", "band"] },
+    { category: "campus", keywords: ["campus", "cal poly", "club", "student event"] },
+    { category: "indoor", keywords: ["indoor", "museum", "walk", "study spot", "library", "quiet"] }
+  ];
+
+  rules.forEach((rule) => {
+    if (rule.keywords.some((keyword) => text.includes(keyword))) {
+      matches.push(rule.category);
+    }
+  });
+
+  const unique = [...new Set(matches)];
+  const strict = unique.length > 0;
+  return { requestedCategories: unique, strictCategoryMatch: strict };
+}
+
+function sanitizeCardsForIntent(candidateCards, fallbackCards, intent) {
+  if (!intent.strictCategoryMatch || intent.requestedCategories.length === 0) {
+    return Array.isArray(candidateCards) && candidateCards.length > 0 ? candidateCards : fallbackCards;
+  }
+
+  const allowed = new Set(intent.requestedCategories);
+  const input = Array.isArray(candidateCards) ? candidateCards : [];
+  const filtered = input.filter((card) => allowed.has(card.category));
+
+  if (filtered.length > 0) return filtered;
+
+  const fallbackFiltered = fallbackCards.filter((card) => allowed.has(card.category));
+  return fallbackFiltered.length > 0 ? fallbackFiltered : fallbackCards;
 }
 
 function parseIcsSummary(content) {
@@ -309,6 +362,166 @@ async function generateAssistantReply(payload) {
     return response.output_text || "I have a few recommendations ready.";
   } catch {
     return "I can still recommend options right now, but the AI model is temporarily unavailable.";
+  }
+}
+
+function safeString(value, fallback = "") {
+  if (typeof value === "string") return value;
+  if (value == null) return fallback;
+  return String(value);
+}
+
+function normalizeChatContext(context, userId) {
+  const prefs = getOrInitPreferences(userId);
+  const study = computeStudyLoad(userId);
+  const raw = context && typeof context === "object" ? context : {};
+  const weather = typeof raw.weather === "string" ? raw.weather : raw.weather?.summary || "clear";
+
+  return {
+    screen: safeString(raw.activeScreen || raw.screen || "unknown"),
+    weather: safeString(weather, "clear"),
+    time_of_day: safeString(raw.timeOfDay || "evening"),
+    study_load_score: study.study_load_score,
+    due_soon_count: study.due_soon_count,
+    unfinished_count: study.unfinished_count,
+    preferences: {
+      categories: Array.isArray(prefs.categories) ? prefs.categories : [],
+      vibe: safeString(prefs.vibe || "chill"),
+      budget: safeString(prefs.budget || "medium"),
+      transport: safeString(prefs.transport || "walk")
+    },
+    upcoming_plan_count: store.plans.filter((plan) => plan.host_user_id === userId).length
+  };
+}
+
+function parseJsonObject(text) {
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    const start = text.indexOf("{");
+    const end = text.lastIndexOf("}");
+    if (start === -1 || end === -1 || end <= start) return null;
+    try {
+      return JSON.parse(text.slice(start, end + 1));
+    } catch {
+      return null;
+    }
+  }
+}
+
+function buildAiCacheKey({ message, context, cards, proposedActions }) {
+  return JSON.stringify({
+    message: String(message || "").trim().toLowerCase(),
+    context,
+    cards: Array.isArray(cards) ? cards.map((card) => ({ id: card.id, category: card.category, title: card.title })) : [],
+    proposed_actions: Array.isArray(proposedActions) ? proposedActions.map((action) => action.type) : []
+  });
+}
+
+function getCachedAiReply(key) {
+  const row = aiResponseCache.get(key);
+  if (!row) return null;
+  if (Date.now() - row.at > AI_CACHE_TTL_MS) {
+    aiResponseCache.delete(key);
+    return null;
+  }
+  return row.value;
+}
+
+function setCachedAiReply(key, value) {
+  aiResponseCache.set(key, { at: Date.now(), value });
+  if (aiResponseCache.size > 200) {
+    const oldest = aiResponseCache.keys().next().value;
+    if (oldest) aiResponseCache.delete(oldest);
+  }
+}
+
+async function generateStructuredAssistantReply({ message, context, cards, proposedActions }) {
+  const cacheKey = buildAiCacheKey({ message, context, cards, proposedActions });
+  const cached = getCachedAiReply(cacheKey);
+  if (cached) return cached;
+
+  if (!process.env.OPENAI_API_KEY) {
+    const fallback = {
+      assistant_text:
+        "Here are options ranked from your study load, vibe, and budget. I can draft a plan or create invite links if you confirm."
+    };
+    setCachedAiReply(cacheKey, fallback);
+    return fallback;
+  }
+
+  try {
+    if (!openai) {
+      openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    }
+
+    const requestPromise = openai.responses.create({
+      model: "gpt-4.1-mini",
+      temperature: 0.3,
+      max_output_tokens: 220,
+      input: [
+        {
+          role: "system",
+          content:
+            "You are Jarvis, the SLO student planner assistant.\n" +
+            "Goals:\n" +
+            "- Help Cal Poly students plan around study load, budget, vibe, transport, and time.\n" +
+            "- Prefer options from app data first; if missing, say so.\n" +
+            "Rules:\n" +
+            "- Never claim any write action is completed.\n" +
+            "- For writes (RSVP, join jam, create plan, save event), only suggest confirmation.\n" +
+            "- Keep answers concise and practical.\n" +
+            "- If study load is high, prioritize low-friction options.\n" +
+            "- Never relabel categories. A hike/outdoor request must return outdoor cards only.\n" +
+            "- If no matching cards exist for requested intent, explicitly say no exact match.\n" +
+            "Return strict JSON only with shape:\n" +
+            "{ \"assistant_text\": string, \"cards\": [{\"id\": string, \"title\": string, \"subtitle\": string, \"deep_link\": string, \"reason_tags\": string[], \"category\": string}], \"proposed_actions\": [{\"action_id\": string, \"type\": string, \"payload\": object, \"requires_confirmation\": true}] }"
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            message,
+            context,
+            cards,
+            proposed_actions: proposedActions
+          })
+        }
+      ]
+    });
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error("openai_timeout")), AI_TIMEOUT_MS);
+    });
+
+    const response = await Promise.race([requestPromise, timeoutPromise]);
+
+    const parsed = parseJsonObject(response.output_text || "");
+    if (parsed && typeof parsed.assistant_text === "string") {
+      const value = {
+        assistant_text: parsed.assistant_text,
+        cards: Array.isArray(parsed.cards) ? parsed.cards : cards,
+        proposed_actions: Array.isArray(parsed.proposed_actions) ? parsed.proposed_actions : proposedActions
+      };
+      setCachedAiReply(cacheKey, value);
+      return value;
+    }
+
+    const fallback = {
+      assistant_text: response.output_text || "I have a few recommendations ready.",
+      cards,
+      proposed_actions: proposedActions
+    };
+    setCachedAiReply(cacheKey, fallback);
+    return fallback;
+  } catch {
+    const fallback = {
+      assistant_text:
+        "I can still recommend options right now, but the AI model is temporarily unavailable.",
+      cards,
+      proposed_actions: proposedActions
+    };
+    setCachedAiReply(cacheKey, fallback);
+    return fallback;
   }
 }
 
@@ -1096,10 +1309,13 @@ export function registerPlannerApi(app) {
       return;
     }
 
-    const context = req.body?.context || {};
+    const context = normalizeChatContext(req.body?.context, auth.userId);
+    const intent = parseMessageIntent(message);
     const recommendations = rankedRecommendations(auth.userId, {
       weather: context.weather || "clear",
-      timeOfDay: context.timeOfDay || "evening"
+      timeOfDay: context.time_of_day || "evening",
+      requestedCategories: intent.requestedCategories,
+      strictCategoryMatch: intent.strictCategoryMatch
     });
 
     const cards = recommendations.slice(0, 3).map((item) => ({
@@ -1108,6 +1324,7 @@ export function registerPlannerApi(app) {
       subtitle: item.description,
       deep_link: item.link,
       reason_tags: item.reason_tags,
+      category: item.category,
       score: item.score
     }));
 
@@ -1162,18 +1379,89 @@ export function registerPlannerApi(app) {
       proposedActions.push({ action_id: actionId, type: payload.type, payload, requires_confirmation: true });
     }
 
-    const assistantText = await generateAssistantReply({ message, context, cards, proposedActions });
+    const aiReply = await generateStructuredAssistantReply({
+      message,
+      context,
+      cards,
+      proposedActions
+    });
 
+    const chatId = randomUUID();
     store.aiActionLogs.push({
-      id: randomUUID(),
+      id: chatId,
       user_id: auth.userId,
       prompt: message,
+      context_json: context,
+      cards_json: cards,
+      assistant_text: aiReply.assistant_text,
       proposed_actions_json: proposedActions,
       confirmed_action_id: null,
+      feedback_events: [],
       created_at: NOW().toISOString()
     });
 
-    res.json({ assistant_text: assistantText, cards, proposed_actions: proposedActions });
+    const finalCards = sanitizeCardsForIntent(aiReply.cards || cards, cards, intent);
+
+    res.json({
+      chat_id: chatId,
+      assistant_text: aiReply.assistant_text,
+      cards: finalCards,
+      proposed_actions: aiReply.proposed_actions || proposedActions
+    });
+  });
+
+  app.post("/api/agent/feedback", (req, res) => {
+    const auth = requireSession(req, res);
+    if (!auth) return;
+
+    const rawSignal = String(req.body?.signal || "").trim().toLowerCase();
+    const signal = rawSignal === "helpful" || rawSignal === "up" ? "up" : rawSignal === "not_fit" || rawSignal === "down" ? "down" : null;
+    if (!signal) {
+      res.status(400).json({ error: "signal is required: helpful|not_fit (or up|down)" });
+      return;
+    }
+
+    const chatId = String(req.body?.chat_id || "").trim();
+    const cardIds = Array.isArray(req.body?.card_ids)
+      ? req.body.card_ids.map((id) => String(id)).filter(Boolean).slice(0, 10)
+      : [];
+    const note = String(req.body?.note || "").trim().slice(0, 500);
+
+    const feedback = {
+      id: randomUUID(),
+      user_id: auth.userId,
+      signal,
+      card_ids: cardIds,
+      note,
+      created_at: NOW().toISOString()
+    };
+
+    let attached_to_chat = false;
+    if (chatId) {
+      const log = store.aiActionLogs.find((row) => row.id === chatId && row.user_id === auth.userId);
+      if (log) {
+        if (!Array.isArray(log.feedback_events)) log.feedback_events = [];
+        log.feedback_events.push(feedback);
+        attached_to_chat = true;
+      }
+    }
+
+    if (!attached_to_chat) {
+      store.aiActionLogs.push({
+        id: randomUUID(),
+        user_id: auth.userId,
+        prompt: String(req.body?.prompt || "").trim(),
+        context_json: req.body?.context || {},
+        cards_json: [],
+        assistant_text: "",
+        proposed_actions_json: [],
+        confirmed_action_id: null,
+        feedback_events: [feedback],
+        created_at: NOW().toISOString()
+      });
+    }
+
+    res.json({ ok: true, feedback, attached_to_chat });
   });
 
   app.post("/api/agent/actions/:actionId/confirm", (req, res) => {
@@ -1243,6 +1531,14 @@ export function registerPlannerApi(app) {
         deep_link: "https://www.opentable.com/",
         note: "Complete booking in provider flow."
       };
+    }
+
+    const chatId = String(req.body?.chat_id || "").trim();
+    if (chatId) {
+      const log = store.aiActionLogs.find((row) => row.id === chatId && row.user_id === auth.userId);
+      if (log) {
+        log.confirmed_action_id = req.params.actionId;
+      }
     }
 
     store.pendingActions.delete(req.params.actionId);
