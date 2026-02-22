@@ -344,6 +344,11 @@ When a reservation call is confirmed by restaurant input (`press 1`), backend mu
 - Persist per-recipient delivery results in `message_deliveries`.
 - Keep reservation confirmation state even if SMS delivery partially fails.
 
+Current demo implementation note:
+- SMS send execution is intentionally commented/paused in reservation-confirm path for demo approval timing.
+- Backend still returns `sms_notifications` metadata so UI can show paused status.
+- Re-enable path by restoring `sendGroupReservationSms(...)` invocation in `POST /api/twilio/voice/input` when approvals are complete.
+
 ## 12) Realtime Model (Supabase)
 
 Clients subscribe to plan-specific changes.

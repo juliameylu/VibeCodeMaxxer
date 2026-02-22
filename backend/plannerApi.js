@@ -1784,24 +1784,16 @@ export function registerPlannerApi(app) {
       job.reservation_decision = "confirmed";
       job.status = "reservation-confirmed";
       twiml.say({ voice: "alice", language: "en-US" }, "Thank you. Reservation confirmed.");
-      const smsResult = await sendGroupReservationSms({
-        userId: job.user_id,
-        groupId: job.group_id,
-        restaurantName: job.restaurant_name,
-        partySize: job.party_size,
-        reservationTime: job.reservation_time
-      });
-      const smsState = smsResult.errors.length > 0 && smsResult.sent === 0 && smsResult.recipients.length === 0
-        ? "paused"
-        : smsResult.failed > 0
-          ? "partial"
-          : "sent";
+      // SMS workflow intentionally paused for demo approval timing.
+      // If re-enabled, call `sendGroupReservationSms(...)` here and map provider results.
       job.sms_notifications = {
-        state: smsState,
-        sent: smsResult.sent,
-        failed: smsResult.failed,
-        recipients: smsResult.recipients.length,
-        errors: smsResult.errors
+        state: "paused",
+        sent: 0,
+        failed: 0,
+        recipients: 0,
+        errors: [
+          "SMS demo paused: we were close to shipping group confirmation texts, but approval timing did not complete before the demo window."
+        ]
       };
     } else if (digit === "2") {
       job.reservation_decision = "declined";

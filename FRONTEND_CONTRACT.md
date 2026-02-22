@@ -392,6 +392,22 @@ All pages must:
 - Do not remove required fields without version bump.
 - Regenerate must exclude previously returned options.
 
+## 10) iPhone Deployment and Jarvis Call UX
+
+- Frontend must remain compatible with Capacitor iOS packaging.
+- API calls from mobile webview must support configurable base URL via `VITE_API_BASE_URL`.
+- `Jarvis` route (`/jarvis`, `/ai`) must expose a reservation-call panel in the new main UI.
+- Reservation call payload in Jarvis demo mode:
+  - `restaurant_name`
+  - `reservation_time`
+  - `party_size`
+  - `special_request`
+  - `group_id` set to `creator-only`
+- Frontend must poll call job status and render:
+  - `status`
+  - `reservation_decision`
+  - `decision_digit`
+
 ---
 
 If you want, I can next generate:
