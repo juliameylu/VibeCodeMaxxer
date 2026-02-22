@@ -1,10 +1,47 @@
 import OpenAI from "openai";
 import { randomUUID } from "crypto";
+import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import { DynamoDBDocumentClient, GetCommand, PutCommand } from "@aws-sdk/lib-dynamodb";
+import { createRemoteJWKSet, jwtVerify } from "jose";
+import twilio from "twilio";
+import dotenv from "dotenv";
+
+dotenv.config({ path: ".env" });
+dotenv.config({ path: ".env.local", override: true });
 
 let openai = null;
-const AI_CACHE_TTL_MS = 1000 * 60 * 2;
-const AI_TIMEOUT_MS = 3200;
-const aiResponseCache = new Map();
+const AWS_REGION = process.env.AWS_REGION || "";
+const AWS_DYNAMO_TABLE = process.env.AWS_DYNAMO_TABLE || "";
+const AWS_STATE_PK = process.env.AWS_STATE_PK || "planner_state";
+const AWS_STATE_SK = process.env.AWS_STATE_SK || "v1";
+const SNAPSHOT_FLUSH_MS = Number(process.env.SNAPSHOT_FLUSH_MS || 2000);
+const AUTH_MODE = process.env.AUTH_MODE || "session_or_cognito";
+const COGNITO_USER_POOL_ID = process.env.COGNITO_USER_POOL_ID || "";
+const COGNITO_APP_CLIENT_ID = process.env.COGNITO_APP_CLIENT_ID || "";
+const COGNITO_ISSUER = COGNITO_USER_POOL_ID && AWS_REGION
+  ? `https://cognito-idp.${AWS_REGION}.amazonaws.com/${COGNITO_USER_POOL_ID}`
+  : "";
+const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || "";
+const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || "";
+const TWILIO_PHONE_NUMBER = process.env.TWILIO_PHONE_NUMBER || "";
+const DEMO_TARGET_NUMBER = process.env.DEMO_TARGET_NUMBER || "";
+const DEMO_SMS_TARGET_NUMBER = process.env.DEMO_SMS_TARGET_NUMBER || "";
+const TWILIO_PUBLIC_BASE_URL = process.env.TWILIO_PUBLIC_BASE_URL || process.env.PUBLIC_BASE_URL || "";
+const JARVIS_CALL_TONE = process.env.JARVIS_CALL_TONE || "casual";
+const DEMO_GUEST_PHONE_NUMBER = process.env.DEMO_GUEST_PHONE_NUMBER || "";
+const DEMO_USER_PHONE_MAP_JSON = process.env.DEMO_USER_PHONE_MAP_JSON || "{}";
+const RESERVATION_CALL_MAX_SECONDS = 120;
+const RESERVATION_CALL_MAX_RETRIES = 1;
+const SMS_NOTIFICATIONS_ENABLED = false;
+const USE_AWS_STATE = Boolean(AWS_REGION && AWS_DYNAMO_TABLE);
+const dynamo = USE_AWS_STATE
+  ? DynamoDBDocumentClient.from(new DynamoDBClient({ region: AWS_REGION }))
+  : null;
+const snapshotKey = { pk: AWS_STATE_PK, sk: AWS_STATE_SK };
+const cognitoJwks = COGNITO_ISSUER ? createRemoteJWKSet(new URL(`${COGNITO_ISSUER}/.well-known/jwks.json`)) : null;
+let storeDirty = false;
+let snapshotWriteInFlight = null;
+let twilioClient = null;
 
 const NOW = () => new Date();
 
@@ -21,10 +58,11 @@ const store = {
   planParticipants: [],
   jams: [],
   jamMembers: [],
-  notifications: [],
   studyTasks: [],
   aiActionLogs: [],
+  messageDeliveries: [],
   pendingActions: new Map(),
+  reservationCallJobs: new Map(),
   eventsCatalog: [
     {
       id: "event-brew-quiet",
@@ -104,27 +142,163 @@ const store = {
   ]
 };
 
-function createNotification({ userId, type, title, message, entityType = null, entityId = null }) {
-  const notification = {
-    id: randomUUID(),
-    user_id: userId,
-    type,
-    title,
-    message,
-    entity_type: entityType,
-    entity_id: entityId,
-    read: false,
-    created_at: NOW().toISOString()
+function markStoreDirty() {
+  storeDirty = true;
+}
+
+function serializeStore() {
+  return {
+    ...store,
+    users: Object.fromEntries(store.users.entries()),
+    sessions: Object.fromEntries(store.sessions.entries()),
+    preferences: Object.fromEntries(store.preferences.entries()),
+    connections: Object.fromEntries(store.connections.entries()),
+    pendingActions: Object.fromEntries(store.pendingActions.entries()),
+    reservationCallJobs: Object.fromEntries(store.reservationCallJobs.entries()),
+    messageDeliveries: store.messageDeliveries
   };
-  store.notifications.push(notification);
-  return notification;
+}
+
+function hydrateStore(snapshot) {
+  if (!snapshot) return;
+  store.users = new Map(Object.entries(snapshot.users || {}));
+  store.sessions = new Map(Object.entries(snapshot.sessions || {}));
+  store.preferences = new Map(Object.entries(snapshot.preferences || {}));
+  store.connections = new Map(Object.entries(snapshot.connections || {}));
+  store.pendingActions = new Map(Object.entries(snapshot.pendingActions || {}));
+  store.reservationCallJobs = new Map(Object.entries(snapshot.reservationCallJobs || {}));
+  store.messageDeliveries = snapshot.messageDeliveries || [];
+  store.userEventStates = snapshot.userEventStates || [];
+  store.groups = snapshot.groups || [];
+  store.groupMembers = snapshot.groupMembers || [];
+  store.invites = snapshot.invites || [];
+  store.plans = snapshot.plans || [];
+  store.planParticipants = snapshot.planParticipants || [];
+  store.jams = snapshot.jams || [];
+  store.jamMembers = snapshot.jamMembers || [];
+  store.studyTasks = snapshot.studyTasks || [];
+  store.aiActionLogs = snapshot.aiActionLogs || [];
+  store.eventsCatalog = snapshot.eventsCatalog || store.eventsCatalog;
+}
+
+async function loadStoreSnapshot() {
+  if (!dynamo) return;
+  try {
+    const out = await dynamo.send(new GetCommand({
+      TableName: AWS_DYNAMO_TABLE,
+      Key: snapshotKey
+    }));
+    if (!out.Item?.payload) return;
+    hydrateStore(out.Item.payload.store);
+    console.log("Loaded planner state snapshot from DynamoDB");
+  } catch (error) {
+    console.error("Failed to load planner snapshot:", error?.message || error);
+  }
+}
+
+async function flushStoreSnapshot(force = false) {
+  if (!dynamo) return;
+  if (!force && !storeDirty) return;
+  if (snapshotWriteInFlight) return snapshotWriteInFlight;
+  snapshotWriteInFlight = dynamo.send(new PutCommand({
+    TableName: AWS_DYNAMO_TABLE,
+    Item: {
+      ...snapshotKey,
+      payload: {
+        store: serializeStore(),
+        updated_at: NOW().toISOString()
+      }
+    }
+  }))
+    .then(() => {
+      storeDirty = false;
+    })
+    .catch((error) => {
+      console.error("Failed to save planner snapshot:", error?.message || error);
+    })
+    .finally(() => {
+      snapshotWriteInFlight = null;
+    });
+  return snapshotWriteInFlight;
 }
 
 function normalizeEmail(value) {
   return String(value || "").trim().toLowerCase();
 }
 
+function normalizePhone(value) {
+  const digits = String(value || "").replace(/[^\d]/g, "");
+  if (!digits) return "";
+  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+  if (digits.length === 10) return `+1${digits}`;
+  if (String(value || "").trim().startsWith("+")) return `+${digits}`;
+  return `+${digits}`;
+}
+
+function isLikelyE164(value) {
+  return /^\+\d{10,15}$/.test(String(value || ""));
+}
+
+function canUseTwilio() {
+  return Boolean(TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN && TWILIO_PHONE_NUMBER && DEMO_TARGET_NUMBER && TWILIO_PUBLIC_BASE_URL);
+}
+
+function missingTwilioConfigKeys() {
+  const required = {
+    TWILIO_ACCOUNT_SID,
+    TWILIO_AUTH_TOKEN,
+    TWILIO_PHONE_NUMBER,
+    DEMO_TARGET_NUMBER,
+    TWILIO_PUBLIC_BASE_URL
+  };
+  return Object.entries(required)
+    .filter(([, value]) => !String(value || "").trim())
+    .map(([key]) => key);
+}
+
+function twilioWebhookUrl(path) {
+  const base = TWILIO_PUBLIC_BASE_URL.replace(/\/$/, "");
+  return `${base}${path}`;
+}
+
+function getTwilioClient() {
+  if (!canUseTwilio()) return null;
+  if (!twilioClient) {
+    twilioClient = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
+  }
+  return twilioClient;
+}
+
+function parseDemoUserPhoneMap() {
+  try {
+    const parsed = JSON.parse(DEMO_USER_PHONE_MAP_JSON || "{}");
+    if (!parsed || typeof parsed !== "object") return {};
+    return parsed;
+  } catch {
+    return {};
+  }
+}
+
+function resolveSignupPhone(email, submittedPhone) {
+  const normalizedSubmitted = normalizePhone(submittedPhone);
+  if (isLikelyE164(normalizedSubmitted)) return normalizedSubmitted;
+
+  const phoneMap = parseDemoUserPhoneMap();
+  const mapped = normalizePhone(phoneMap[normalizeEmail(email)] || "");
+  if (isLikelyE164(mapped)) return mapped;
+
+  if (normalizeEmail(email).endsWith("@guest.local")) {
+    const guestFallback = normalizePhone(DEMO_GUEST_PHONE_NUMBER);
+    if (isLikelyE164(guestFallback)) return guestFallback;
+    return "+15550000000";
+  }
+  return "";
+}
+
 function requireSession(req, res) {
+  if (req.cognitoUser?.userId) {
+    return { token: "cognito", userId: req.cognitoUser.userId, user: req.cognitoUser.user };
+  }
   const token = req.header("x-session-token") || req.body?.sessionToken || req.query?.sessionToken;
   if (!token) {
     res.status(401).json({ error: "Missing session token" });
@@ -225,69 +399,19 @@ function scoreEvent({ event, prefs, studyLoad, weather = "clear", timeOfDay = "e
   return score + Math.max(0, 5 - event.distanceMiles);
 }
 
-function rankedRecommendations(
-  userId,
-  { weather = "clear", timeOfDay = "evening", requestedCategories = [], strictCategoryMatch = false } = {}
-) {
+function rankedRecommendations(userId, { weather = "clear", timeOfDay = "evening" } = {}) {
   const prefs = getOrInitPreferences(userId);
   const studyLoad = computeStudyLoad(userId);
-  const categorySet = new Set(requestedCategories);
 
   return store.eventsCatalog
     .map((event) => ({
       ...event,
-      score:
-        scoreEvent({ event, prefs, studyLoad, weather, timeOfDay }) +
-        (categorySet.size > 0
-          ? categorySet.has(event.category)
-            ? 12
-            : strictCategoryMatch
-              ? -30
-              : -8
-          : 0),
+      score: scoreEvent({ event, prefs, studyLoad, weather, timeOfDay }),
       study_load_score: studyLoad.study_load_score,
       reason_tags: [...event.reasonTags, `study-score-${studyLoad.study_load_score}`]
     }))
     .sort((a, b) => b.score - a.score)
     .slice(0, 8);
-}
-
-function parseMessageIntent(message) {
-  const text = String(message || "").toLowerCase();
-  const matches = [];
-
-  const rules = [
-    { category: "outdoor", keywords: ["hike", "hiking", "trail", "mountain", "peak", "beach", "surf", "sunset"] },
-    { category: "food", keywords: ["food", "eat", "dinner", "lunch", "breakfast", "coffee", "cafe", "restaurant", "taco"] },
-    { category: "concerts", keywords: ["concert", "music", "live show", "show", "band"] },
-    { category: "campus", keywords: ["campus", "cal poly", "club", "student event"] },
-    { category: "indoor", keywords: ["indoor", "museum", "walk", "study spot", "library", "quiet"] }
-  ];
-
-  rules.forEach((rule) => {
-    if (rule.keywords.some((keyword) => text.includes(keyword))) {
-      matches.push(rule.category);
-    }
-  });
-
-  const unique = [...new Set(matches)];
-  const strict = unique.length > 0;
-  return { requestedCategories: unique, strictCategoryMatch: strict };
-}
-
-function sanitizeCardsForIntent(candidateCards, fallbackCards, intent) {
-  if (!intent.strictCategoryMatch || intent.requestedCategories.length === 0) {
-    return Array.isArray(candidateCards) && candidateCards.length > 0 ? candidateCards : fallbackCards;
-  }
-
-  const allowed = new Set(intent.requestedCategories);
-  const input = Array.isArray(candidateCards) ? candidateCards : [];
-  const filtered = input.filter((card) => allowed.has(card.category));
-
-  if (filtered.length > 0) return filtered;
-
-  const fallbackFiltered = fallbackCards.filter((card) => allowed.has(card.category));
-  return fallbackFiltered.length > 0 ? fallbackFiltered : fallbackCards;
 }
 
 function parseIcsSummary(content) {
@@ -334,9 +458,160 @@ function generatePlanOptions({ constraints, recommendations }) {
   return options;
 }
 
+const SLO_KNOWLEDGE_NOTES = [
+  "SLO stands for San Luis Obispo.",
+  "Mission San Luis Obispo de Tolosa was founded in 1772.",
+  "Cal Poly is a major campus anchor for student life in SLO.",
+  "Downtown SLO Farmer's Market runs on Thursday evenings.",
+  "Popular local categories: beaches, hikes, coffee, food, live music, campus events."
+];
+
+function summarizeUserContext(userId, clientContext = {}) {
+  const prefs = getOrInitPreferences(userId);
+  const connections = getOrInitConnections(userId);
+  const studyLoad = computeStudyLoad(userId);
+  const tasks = store.studyTasks
+    .filter((task) => task.user_id === userId && !task.done)
+    .sort((a, b) => new Date(a.due_at || 0).getTime() - new Date(b.due_at || 0).getTime())
+    .slice(0, 10);
+  const plans = store.plans.filter((plan) => plan.host_user_id === userId).slice(-8);
+  const joinedPlanIds = new Set(
+    store.planParticipants.filter((row) => row.user_id === userId).map((row) => row.plan_id)
+  );
+  const participantPlans = store.plans.filter((plan) => joinedPlanIds.has(plan.id)).slice(-8);
+  const jams = store.jamMembers
+    .filter((row) => row.user_id === userId)
+    .map((row) => store.jams.find((jam) => jam.id === row.jam_id))
+    .filter(Boolean)
+    .slice(-8);
+  const userGroups = store.groups.filter((group) => group.owner_user_id === userId).slice(-8);
+  const eventStates = store.userEventStates.filter((row) => row.user_id === userId);
+  const confirmedEvents = eventStates.filter((row) => row.state === "confirmed").length;
+  const maybeEvents = eventStates.filter((row) => row.state === "maybe").length;
+  const savedEvents = eventStates.filter((row) => row.state === "saved").length;
+
+  return {
+    client_context: clientContext,
+    preferences: prefs,
+    connections,
+    study_load: studyLoad,
+    upcoming_tasks: tasks,
+    plans: plans.map((plan) => ({
+      id: plan.id,
+      title: plan.title,
+      status: plan.status,
+      created_at: plan.created_at
+    })),
+    participant_plans: participantPlans.map((plan) => ({
+      id: plan.id,
+      title: plan.title,
+      status: plan.status
+    })),
+    jams: jams.map((jam) => ({
+      id: jam.id,
+      code: jam.code,
+      name: jam.name,
+      status: jam.status
+    })),
+    groups: userGroups.map((group) => ({
+      id: group.id,
+      name: group.name
+    })),
+    event_state_summary: {
+      confirmed: confirmedEvents,
+      maybe: maybeEvents,
+      saved: savedEvents
+    },
+    available_catalog_categories: [...new Set(store.eventsCatalog.map((item) => item.category))],
+    slo_knowledge: SLO_KNOWLEDGE_NOTES
+  };
+}
+
+function createPendingAction(payload) {
+  const actionId = randomUUID();
+  store.pendingActions.set(actionId, payload);
+  return {
+    action_id: actionId,
+    type: payload.type,
+    payload,
+    requires_confirmation: true
+  };
+}
+
+function extractJamCodeFromMessage(message) {
+  const match = String(message || "").toUpperCase().match(/\b[A-Z0-9]{4,10}\b/);
+  return match ? match[0] : "";
+}
+
+function inferProposedActions({ userId, message, cards, userContext }) {
+  const lower = String(message || "").toLowerCase();
+  const actions = [];
+  const primaryCardId = cards[0]?.id || store.eventsCatalog[0]?.id || "event-brew-quiet";
+
+  if (/(plan my day|build my schedule|create a time-blocked schedule|make an agenda|create plan|make a plan|plan)/.test(lower)) {
+    actions.push(createPendingAction({
+      type: "create_plan_draft",
+      title: "Jarvis Plan Draft",
+      constraints: {
+        weather: String(userContext?.client_context?.weather || "clear"),
+        timeOfDay: String(userContext?.client_context?.timeOfDay || "evening"),
+        durationMin: 120
+      }
+    }));
+  }
+
+  if (/(rsvp|confirm this|save this event|mark as maybe|book this event)/.test(lower)) {
+    const wantsMaybe = /(maybe|not sure)/.test(lower);
+    const wantsSaved = /(save|bookmark|pin)/.test(lower);
+    actions.push(createPendingAction({
+      type: "rsvp_event",
+      item_id: primaryCardId,
+      state: wantsSaved ? "saved" : wantsMaybe ? "maybe" : "confirmed"
+    }));
+  }
+
+  const jamCode = extractJamCodeFromMessage(message);
+  if (/(join jam|accept jam|jam code|join code)/.test(lower)) {
+    actions.push(createPendingAction({
+      type: "join_jam",
+      code: jamCode || "DEMO42"
+    }));
+  }
+
+  if (/(add task|add assignment|new task|remind me|study task|homework task)/.test(lower)) {
+    const titleMatch = String(message || "").match(/(?:add task|add assignment|new task)\s*:?(.+)$/i);
+    const title = titleMatch?.[1]?.trim() || "Jarvis task";
+    actions.push(createPendingAction({
+      type: "add_study_task",
+      title,
+      due_at: new Date(Date.now() + 1000 * 60 * 60 * 24).toISOString(),
+      course: "General",
+      duration_min: 60
+    }));
+  }
+
+  if (/(reservation|book|booking|zipcar|apple pay|pay|dinner booking|table)/.test(lower)) {
+    actions.push(createPendingAction({
+      type: "create_booking_intent",
+      provider: /zipcar/.test(lower) ? "zipcar" : "external",
+      item_id: primaryCardId
+    }));
+  }
+
+  if (!actions.length && /(what can you automate|what can you do|automate)/.test(lower)) {
+    actions.push(createPendingAction({
+      type: "create_plan_draft",
+      title: "Automation Demo Plan",
+      constraints: { durationMin: 90, weather: "clear", timeOfDay: "afternoon" }
+    }));
+  }
+
+  return actions;
+}
+
 async function generateAssistantReply(payload) {
   if (!process.env.OPENAI_API_KEY) {
-    return "Here are options ranked from your study load, vibe, and budget. I can draft a plan or create invite links if you confirm.";
+    return "I pulled your app context and ranked options. I can automate plan drafts, RSVPs, jam joins, tasks, and booking intents after you confirm.";
   }
 
   try {
@@ -349,8 +624,14 @@ async function generateAssistantReply(payload) {
       input: [
         {
           role: "system",
-          content:
-            "You are OpenJarvis for SLO Planner. Be concise. Recommend activities and plans based on workload. Never claim writes are done before explicit confirmation."
+          content: [
+            "You are OpenJarvis for SLO Planner.",
+            "Use the provided JSON app context as source of truth.",
+            "Recommend concrete next actions from the user's real plans/tasks/events.",
+            "When proposing writes, never claim they are complete before explicit confirmation.",
+            "If user request is ambiguous, ask 1-2 concise clarifying questions first.",
+            "Favor specific SLO suggestions with rationale tied to workload, weather, budget, and timing."
+          ].join(" ")
         },
         {
           role: "user",
@@ -365,174 +646,400 @@ async function generateAssistantReply(payload) {
   }
 }
 
-function safeString(value, fallback = "") {
-  if (typeof value === "string") return value;
-  if (value == null) return fallback;
-  return String(value);
-}
+async function generateReservationCallScript({ restaurantName, partySize, reservationTime, specialRequest }) {
+  const fallback = [
+    `Hi, this is an AI assistant helping someone book a table at ${restaurantName}.`,
+    `Could you check if you have room for ${partySize} people at ${reservationTime}?`,
+    specialRequest ? `Also, quick note: ${specialRequest}.` : null
+  ].filter(Boolean).join(" ");
 
-function normalizeChatContext(context, userId) {
-  const prefs = getOrInitPreferences(userId);
-  const study = computeStudyLoad(userId);
-  const raw = context && typeof context === "object" ? context : {};
-  const weather = typeof raw.weather === "string" ? raw.weather : raw.weather?.summary || "clear";
-
-  return {
-    screen: safeString(raw.activeScreen || raw.screen || "unknown"),
-    weather: safeString(weather, "clear"),
-    time_of_day: safeString(raw.timeOfDay || "evening"),
-    study_load_score: study.study_load_score,
-    due_soon_count: study.due_soon_count,
-    unfinished_count: study.unfinished_count,
-    preferences: {
-      categories: Array.isArray(prefs.categories) ? prefs.categories : [],
-      vibe: safeString(prefs.vibe || "chill"),
-      budget: safeString(prefs.budget || "medium"),
-      transport: safeString(prefs.transport || "walk")
-    },
-    upcoming_plan_count: store.plans.filter((plan) => plan.host_user_id === userId).length
-  };
-}
-
-function parseJsonObject(text) {
-  if (!text) return null;
-  try {
-    return JSON.parse(text);
-  } catch {
-    const start = text.indexOf("{");
-    const end = text.lastIndexOf("}");
-    if (start === -1 || end === -1 || end <= start) return null;
-    try {
-      return JSON.parse(text.slice(start, end + 1));
-    } catch {
-      return null;
-    }
-  }
-}
-
-function buildAiCacheKey({ message, context, cards, proposedActions }) {
-  return JSON.stringify({
-    message: String(message || "").trim().toLowerCase(),
-    context,
-    cards: Array.isArray(cards) ? cards.map((card) => ({ id: card.id, category: card.category, title: card.title })) : [],
-    proposed_actions: Array.isArray(proposedActions) ? proposedActions.map((action) => action.type) : []
-  });
-}
-
-function getCachedAiReply(key) {
-  const row = aiResponseCache.get(key);
-  if (!row) return null;
-  if (Date.now() - row.at > AI_CACHE_TTL_MS) {
-    aiResponseCache.delete(key);
-    return null;
-  }
-  return row.value;
-}
-
-function setCachedAiReply(key, value) {
-  aiResponseCache.set(key, { at: Date.now(), value });
-  if (aiResponseCache.size > 200) {
-    const oldest = aiResponseCache.keys().next().value;
-    if (oldest) aiResponseCache.delete(oldest);
-  }
-}
-
-async function generateStructuredAssistantReply({ message, context, cards, proposedActions }) {
-  const cacheKey = buildAiCacheKey({ message, context, cards, proposedActions });
-  const cached = getCachedAiReply(cacheKey);
-  if (cached) return cached;
-
-  if (!process.env.OPENAI_API_KEY) {
-    const fallback = {
-      assistant_text:
-        "Here are options ranked from your study load, vibe, and budget. I can draft a plan or create invite links if you confirm."
-    };
-    setCachedAiReply(cacheKey, fallback);
-    return fallback;
-  }
-
+  if (!process.env.OPENAI_API_KEY) return fallback;
   try {
     if (!openai) {
       openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     }
-
-    const requestPromise = openai.responses.create({
+    const response = await openai.responses.create({
       model: "gpt-4.1-mini",
-      temperature: 0.3,
-      max_output_tokens: 220,
       input: [
         {
           role: "system",
-          content:
-            "You are Jarvis, the SLO student planner assistant.\n" +
-            "Goals:\n" +
-            "- Help Cal Poly students plan around study load, budget, vibe, transport, and time.\n" +
-            "- Prefer options from app data first; if missing, say so.\n" +
-            "Rules:\n" +
-            "- Never claim any write action is completed.\n" +
-            "- For writes (RSVP, join jam, create plan, save event), only suggest confirmation.\n" +
-            "- Keep answers concise and practical.\n" +
-            "- If study load is high, prioritize low-friction options.\n" +
-            "- Never relabel categories. A hike/outdoor request must return outdoor cards only.\n" +
-            "- If no matching cards exist for requested intent, explicitly say no exact match.\n" +
-            "Return strict JSON only with shape:\n" +
-            "{ \"assistant_text\": string, \"cards\": [{\"id\": string, \"title\": string, \"subtitle\": string, \"deep_link\": string, \"reason_tags\": string[], \"category\": string}], \"proposed_actions\": [{\"action_id\": string, \"type\": string, \"payload\": object, \"requires_confirmation\": true}] }"
+          content: `Write a ${JARVIS_CALL_TONE} but polite phone script for a reservation request. Plain text only. Keep under 90 words.`
         },
         {
           role: "user",
           content: JSON.stringify({
-            message,
-            context,
-            cards,
-            proposed_actions: proposedActions
+            restaurantName,
+            partySize,
+            reservationTime,
+            specialRequest,
+            requirements: [
+              "State this is an AI assistant calling on behalf of a customer.",
+              "Ask politely for reservation confirmation."
+            ]
           })
         }
       ]
     });
-    const timeoutPromise = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error("openai_timeout")), AI_TIMEOUT_MS);
-    });
-
-    const response = await Promise.race([requestPromise, timeoutPromise]);
-
-    const parsed = parseJsonObject(response.output_text || "");
-    if (parsed && typeof parsed.assistant_text === "string") {
-      const value = {
-        assistant_text: parsed.assistant_text,
-        cards: Array.isArray(parsed.cards) ? parsed.cards : cards,
-        proposed_actions: Array.isArray(parsed.proposed_actions) ? parsed.proposed_actions : proposedActions
-      };
-      setCachedAiReply(cacheKey, value);
-      return value;
-    }
-
-    const fallback = {
-      assistant_text: response.output_text || "I have a few recommendations ready.",
-      cards,
-      proposed_actions: proposedActions
-    };
-    setCachedAiReply(cacheKey, fallback);
-    return fallback;
+    const text = String(response.output_text || "").trim();
+    return text || fallback;
   } catch {
-    const fallback = {
-      assistant_text:
-        "I can still recommend options right now, but the AI model is temporarily unavailable.",
-      cards,
-      proposed_actions: proposedActions
-    };
-    setCachedAiReply(cacheKey, fallback);
     return fallback;
   }
 }
 
+async function sendGroupReservationSms({ userId, groupId, restaurantName, partySize, reservationTime }) {
+  if (!SMS_NOTIFICATIONS_ENABLED) {
+    return {
+      sent: 0,
+      failed: 0,
+      recipients: [],
+      errors: [
+        "SMS demo paused: we were close to shipping group confirmation texts, but approval timing did not complete before the demo window."
+      ]
+    };
+  }
+
+  const client = getTwilioClient();
+  const from = normalizePhone(TWILIO_PHONE_NUMBER);
+  if (!client || !isLikelyE164(from)) {
+    return { sent: 0, failed: 0, recipients: [], errors: ["Twilio SMS not configured"] };
+  }
+
+  const demoSmsOverride = normalizePhone(DEMO_SMS_TARGET_NUMBER);
+  if (isLikelyE164(demoSmsOverride)) {
+    const body = `Reservation confirmed at ${restaurantName} for ${partySize} at ${reservationTime}.`;
+    try {
+      const sms = await client.messages.create({
+        to: demoSmsOverride,
+        from,
+        body
+      });
+      store.messageDeliveries.push({
+        id: randomUUID(),
+        user_id: userId,
+        channel: "sms",
+        template: "reservation_confirmed_demo_override",
+        provider_ref: sms.sid,
+        status: "sent",
+        sent_at: NOW().toISOString(),
+        meta: {
+          group_id: groupId,
+          to: demoSmsOverride,
+          override: true
+        }
+      });
+      markStoreDirty();
+      return {
+        sent: 1,
+        failed: 0,
+        recipients: [{ phone: demoSmsOverride, user_id: null, display_name: "Demo SMS Target" }],
+        errors: []
+      };
+    } catch (error) {
+      store.messageDeliveries.push({
+        id: randomUUID(),
+        user_id: userId,
+        channel: "sms",
+        template: "reservation_confirmed_demo_override",
+        provider_ref: "",
+        status: "failed",
+        sent_at: NOW().toISOString(),
+        meta: {
+          group_id: groupId,
+          to: demoSmsOverride,
+          override: true,
+          error: error instanceof Error ? error.message : "send failed"
+        }
+      });
+      markStoreDirty();
+      return {
+        sent: 0,
+        failed: 1,
+        recipients: [{ phone: demoSmsOverride, user_id: null, display_name: "Demo SMS Target" }],
+        errors: ["Failed SMS to demo override number"]
+      };
+    }
+  }
+
+  if (groupId === "creator-only") {
+    const owner = store.users.get(userId);
+    const ownerPhone = normalizePhone(owner?.phone || "");
+    if (!isLikelyE164(ownerPhone)) {
+      return { sent: 0, failed: 0, recipients: [], errors: ["Creator phone is missing or invalid"] };
+    }
+    const body = `Reservation confirmed at ${restaurantName} for ${partySize} at ${reservationTime}.`;
+    try {
+      const sms = await client.messages.create({
+        to: ownerPhone,
+        from,
+        body
+      });
+      store.messageDeliveries.push({
+        id: randomUUID(),
+        user_id: userId,
+        channel: "sms",
+        template: "reservation_confirmed_creator_notify",
+        provider_ref: sms.sid,
+        status: "sent",
+        sent_at: NOW().toISOString(),
+        meta: {
+          group_id: "creator-only",
+          to: ownerPhone
+        }
+      });
+      markStoreDirty();
+      return {
+        sent: 1,
+        failed: 0,
+        recipients: [{ phone: ownerPhone, user_id: userId, display_name: owner?.display_name || "Creator" }],
+        errors: []
+      };
+    } catch (error) {
+      store.messageDeliveries.push({
+        id: randomUUID(),
+        user_id: userId,
+        channel: "sms",
+        template: "reservation_confirmed_creator_notify",
+        provider_ref: "",
+        status: "failed",
+        sent_at: NOW().toISOString(),
+        meta: {
+          group_id: "creator-only",
+          to: ownerPhone,
+          error: error instanceof Error ? error.message : "send failed"
+        }
+      });
+      markStoreDirty();
+      return {
+        sent: 0,
+        failed: 1,
+        recipients: [{ phone: ownerPhone, user_id: userId, display_name: owner?.display_name || "Creator" }],
+        errors: ["Failed SMS to creator"]
+      };
+    }
+  }
+
+  const group = store.groups.find((item) => item.id === groupId && item.owner_user_id === userId);
+  if (!group) {
+    return { sent: 0, failed: 0, recipients: [], errors: ["Selected group not found"] };
+  }
+
+  const members = store.groupMembers.filter((item) => item.group_id === group.id);
+  const dedupe = new Set();
+  const recipients = [];
+  for (const member of members) {
+    let phone = "";
+    if (member.user_id) {
+      const user = store.users.get(member.user_id);
+      phone = normalizePhone(user?.phone || "");
+    } else {
+      phone = normalizePhone(member.phone || "");
+    }
+    if (!isLikelyE164(phone) || dedupe.has(phone)) continue;
+    dedupe.add(phone);
+    recipients.push({
+      phone,
+      member_id: member.id,
+      user_id: member.user_id || null,
+      display_name: member.display_name || "Member"
+    });
+  }
+
+  if (recipients.length === 0) {
+    const owner = store.users.get(userId);
+    const ownerPhone = normalizePhone(owner?.phone || "");
+    if (isLikelyE164(ownerPhone) && !dedupe.has(ownerPhone)) {
+      recipients.push({
+        phone: ownerPhone,
+        member_id: "owner-fallback",
+        user_id: userId,
+        display_name: owner?.display_name || "Owner"
+      });
+      dedupe.add(ownerPhone);
+    }
+  }
+
+  if (recipients.length === 0) {
+    return { sent: 0, failed: 0, recipients: [], errors: ["No valid recipient phone numbers in selected group or owner profile"] };
+  }
+
+  const body = `Reservation confirmed at ${restaurantName} for ${partySize} at ${reservationTime}.`;
+  let sent = 0;
+  let failed = 0;
+  const errors = [];
+
+  for (const recipient of recipients) {
+    try {
+      const sms = await client.messages.create({
+        to: recipient.phone,
+        from,
+        body
+      });
+      sent += 1;
+      store.messageDeliveries.push({
+        id: randomUUID(),
+        user_id: userId,
+        channel: "sms",
+        template: "reservation_confirmed_group_notify",
+        provider_ref: sms.sid,
+        status: "sent",
+        sent_at: NOW().toISOString(),
+        meta: {
+          group_id: groupId,
+          to: recipient.phone
+        }
+      });
+    } catch (error) {
+      failed += 1;
+      errors.push(`Failed SMS to ${recipient.phone}`);
+      store.messageDeliveries.push({
+        id: randomUUID(),
+        user_id: userId,
+        channel: "sms",
+        template: "reservation_confirmed_group_notify",
+        provider_ref: "",
+        status: "failed",
+        sent_at: NOW().toISOString(),
+        meta: {
+          group_id: groupId,
+          to: recipient.phone,
+          error: error instanceof Error ? error.message : "send failed"
+        }
+      });
+    }
+  }
+  markStoreDirty();
+  return { sent, failed, recipients, errors };
+}
+
+async function placeReservationCallAttempt(jobId, attemptIndex) {
+  const client = getTwilioClient();
+  if (!client) {
+    throw new Error("Twilio is not configured. Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER, DEMO_TARGET_NUMBER, and TWILIO_PUBLIC_BASE_URL.");
+  }
+  const job = store.reservationCallJobs.get(jobId);
+  if (!job) {
+    throw new Error("Call job not found");
+  }
+
+  const call = await client.calls.create({
+    to: job.target_number,
+    from: normalizePhone(TWILIO_PHONE_NUMBER),
+    url: twilioWebhookUrl(`/api/twilio/voice/reservation-twiml?jobId=${encodeURIComponent(jobId)}`),
+    statusCallback: twilioWebhookUrl(`/api/twilio/voice/status?jobId=${encodeURIComponent(jobId)}&attempt=${attemptIndex}`),
+    statusCallbackMethod: "POST",
+    statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
+    timeout: 20,
+    timeLimit: RESERVATION_CALL_MAX_SECONDS
+  });
+
+  const attemptRecord = {
+    attempt_index: attemptIndex,
+    call_sid: call.sid,
+    status: call.status || "queued",
+    created_at: NOW().toISOString(),
+    updated_at: NOW().toISOString()
+  };
+
+  const attempts = Array.isArray(job.attempts) ? [...job.attempts] : [];
+  const existingIndex = attempts.findIndex((item) => item.attempt_index === attemptIndex);
+  if (existingIndex >= 0) {
+    attempts[existingIndex] = attemptRecord;
+  } else {
+    attempts.push(attemptRecord);
+  }
+
+  job.attempts = attempts;
+  job.current_attempt = attemptIndex;
+  job.call_sid = call.sid;
+  job.status = attemptIndex > 0 ? "retrying" : "calling";
+  job.updated_at = NOW().toISOString();
+  store.reservationCallJobs.set(jobId, job);
+  markStoreDirty();
+  return call;
+}
+
 export function registerPlannerApi(app) {
+  loadStoreSnapshot().catch(() => {});
+  setInterval(() => {
+    flushStoreSnapshot(false).catch(() => {});
+  }, SNAPSHOT_FLUSH_MS);
+
+  app.use((req, res, next) => {
+    res.on("finish", () => {
+      if (["POST", "PUT", "PATCH", "DELETE"].includes(req.method) && res.statusCode < 400) {
+        markStoreDirty();
+      }
+    });
+    next();
+  });
+
+  app.use(async (req, res, next) => {
+    const auth = req.header("authorization") || "";
+    if (!auth.startsWith("Bearer ")) {
+      return next();
+    }
+    if (AUTH_MODE === "session") {
+      return next();
+    }
+    if (!cognitoJwks || !COGNITO_ISSUER) {
+      return next();
+    }
+    const token = auth.slice(7).trim();
+    if (!token) {
+      return next();
+    }
+    try {
+      const { payload } = await jwtVerify(token, cognitoJwks, {
+        issuer: COGNITO_ISSUER
+      });
+      const tokenUse = String(payload.token_use || "");
+      if (tokenUse !== "id" && tokenUse !== "access") {
+        return next();
+      }
+      if (COGNITO_APP_CLIENT_ID && tokenUse === "id" && payload.aud !== COGNITO_APP_CLIENT_ID) {
+        return next();
+      }
+      const userId = String(payload.sub || "");
+      if (!userId) {
+        return next();
+      }
+      const email = normalizeEmail(payload.email || `${userId}@cognito.local`);
+      let user = store.users.get(userId);
+      if (!user) {
+        user = {
+          id: userId,
+          email,
+          display_name: String(payload.name || payload["cognito:username"] || "SLO Student"),
+          cal_poly_email: email.endsWith("@calpoly.edu") ? email : "",
+          onboarding_complete: false,
+          created_at: NOW().toISOString(),
+          password: null
+        };
+        store.users.set(userId, user);
+        getOrInitPreferences(userId);
+        getOrInitConnections(userId);
+        markStoreDirty();
+      }
+      req.cognitoUser = { userId, user };
+      return next();
+    } catch {
+      return next();
+    }
+  });
+
   app.post("/api/auth/signup", (req, res) => {
     const email = normalizeEmail(req.body?.email);
     const password = String(req.body?.password || "");
     const displayName = String(req.body?.displayName || "").trim() || "SLO Student";
+    const phone = resolveSignupPhone(email, req.body?.phone);
 
     if (!email || !password) {
       res.status(400).json({ error: "email and password are required" });
+      return;
+    }
+    if (!phone) {
+      res.status(400).json({ error: "phone is required (E.164 format like +15551234567)" });
       return;
     }
 
@@ -548,6 +1055,7 @@ export function registerPlannerApi(app) {
       email,
       display_name: displayName,
       cal_poly_email: email.endsWith("@calpoly.edu") ? email : "",
+      phone,
       onboarding_complete: false,
       created_at: NOW().toISOString(),
       password
@@ -556,6 +1064,7 @@ export function registerPlannerApi(app) {
     store.users.set(userId, user);
     getOrInitPreferences(userId);
     getOrInitConnections(userId);
+    markStoreDirty();
 
     const sessionToken = randomUUID();
     store.sessions.set(sessionToken, userId);
@@ -566,6 +1075,7 @@ export function registerPlannerApi(app) {
         id: user.id,
         email: user.email,
         display_name: user.display_name,
+        phone: user.phone,
         onboarding_complete: user.onboarding_complete
       }
     });
@@ -587,12 +1097,14 @@ export function registerPlannerApi(app) {
 
     const sessionToken = randomUUID();
     store.sessions.set(sessionToken, user.id);
+    markStoreDirty();
     res.json({
       sessionToken,
       user: {
         id: user.id,
         email: user.email,
         display_name: user.display_name,
+        phone: user.phone || "",
         onboarding_complete: user.onboarding_complete
       }
     });
@@ -619,6 +1131,7 @@ export function registerPlannerApi(app) {
         id: user.id,
         email: user.email,
         display_name: user.display_name,
+        phone: user.phone || "",
         onboarding_complete: Boolean(user.onboarding_complete)
       },
       preferences: getOrInitPreferences(user.id),
@@ -644,6 +1157,7 @@ export function registerPlannerApi(app) {
 
     store.preferences.set(auth.userId, next);
     auth.user.onboarding_complete = true;
+    markStoreDirty();
 
     res.json({ preferences: next, onboarding_complete: true });
   });
@@ -667,6 +1181,7 @@ export function registerPlannerApi(app) {
     connections.calendar_google_connected = true;
     connections.updated_at = NOW().toISOString();
     store.connections.set(auth.userId, connections);
+    markStoreDirty();
 
     res.json({ connected: true, provider: "google", connections });
   });
@@ -680,6 +1195,7 @@ export function registerPlannerApi(app) {
     connections.calendar_ics_connected = true;
     connections.updated_at = NOW().toISOString();
     store.connections.set(auth.userId, connections);
+    markStoreDirty();
 
     res.json({ imported_count: events.length, sample: events.slice(0, 5), connections });
   });
@@ -728,6 +1244,7 @@ export function registerPlannerApi(app) {
         }
       );
     }
+    markStoreDirty();
 
     res.json({ connected: true, mode: "oauth", connections });
   });
@@ -747,6 +1264,7 @@ export function registerPlannerApi(app) {
     connections.canvas_mode = "manual";
     connections.updated_at = NOW().toISOString();
     store.connections.set(auth.userId, connections);
+    markStoreDirty();
 
     res.json({ connected: true, mode: "manual", connections });
   });
@@ -843,6 +1361,7 @@ export function registerPlannerApi(app) {
       created_at: NOW().toISOString()
     };
     store.userEventStates.push(next);
+    markStoreDirty();
 
     res.json({ state: next });
   });
@@ -882,6 +1401,16 @@ export function registerPlannerApi(app) {
       created_at: NOW().toISOString()
     };
     store.groups.push(group);
+    store.groupMembers.push({
+      id: randomUUID(),
+      group_id: group.id,
+      member_type: "user",
+      user_id: auth.userId,
+      phone: auth.user.phone || null,
+      email: auth.user.email || null,
+      display_name: auth.user.display_name || "You"
+    });
+    markStoreDirty();
 
     res.json({ group });
   });
@@ -892,9 +1421,39 @@ export function registerPlannerApi(app) {
 
     const groups = store.groups
       .filter((group) => group.owner_user_id === auth.userId)
-      .map((group) => ({ ...group, members: store.groupMembers.filter((member) => member.group_id === group.id) }));
+      .map((group) => ({
+        ...group,
+        members: store.groupMembers
+          .filter((member) => member.group_id === group.id)
+          .map((member) => {
+            if (member.user_id) {
+              const linked = store.users.get(member.user_id);
+              return {
+                ...member,
+                phone: linked?.phone || member.phone || null,
+                email: linked?.email || member.email || null
+              };
+            }
+            return member;
+          })
+      }));
 
     res.json({ groups });
+  });
+
+  app.get("/api/users/directory", (req, res) => {
+    const auth = requireSession(req, res);
+    if (!auth) return;
+
+    const users = [...store.users.values()]
+      .filter((user) => user.id !== auth.userId)
+      .map((user) => ({
+        id: user.id,
+        display_name: user.display_name || "User",
+        email: user.email || "",
+        phone: user.phone || ""
+      }));
+    res.json({ users });
   });
 
   app.post("/api/groups/:groupId/members", (req, res) => {
@@ -907,17 +1466,25 @@ export function registerPlannerApi(app) {
       return;
     }
 
+    const requestedUserId = String(req.body?.user_id || "").trim();
+    const linkedUser = requestedUserId ? store.users.get(requestedUserId) : null;
+    if (requestedUserId && !linkedUser) {
+      res.status(404).json({ error: "Selected user not found" });
+      return;
+    }
+
     const member = {
       id: randomUUID(),
       group_id: group.id,
-      member_type: req.body?.user_id ? "user" : "external_contact",
-      user_id: req.body?.user_id || null,
-      phone: req.body?.phone || null,
-      email: req.body?.email || null,
-      display_name: req.body?.display_name || "New member"
+      member_type: linkedUser ? "user" : "external_contact",
+      user_id: linkedUser?.id || null,
+      phone: linkedUser?.phone || req.body?.phone || null,
+      email: linkedUser?.email || req.body?.email || null,
+      display_name: linkedUser?.display_name || req.body?.display_name || "New member"
     };
 
     store.groupMembers.push(member);
+    markStoreDirty();
     res.json({ member });
   });
 
@@ -942,20 +1509,7 @@ export function registerPlannerApi(app) {
       expires_at: new Date(Date.now() + 1000 * 60 * 60 * 24 * 7).toISOString()
     };
     store.invites.push(invite);
-
-    if (entityType === "jam") {
-      const jam = store.jams.find((candidate) => candidate.id === entityId);
-      if (jam) {
-        createNotification({
-          userId: auth.userId,
-          type: "jam_invite_link_created",
-          title: "Jam invite link created",
-          message: `Your invite link for ${jam.name} is ready to share.`,
-          entityType: "jam",
-          entityId: jam.id
-        });
-      }
-    }
+    markStoreDirty();
 
     res.json({ invite, link: `/join/${token}` });
   });
@@ -1010,17 +1564,9 @@ export function registerPlannerApi(app) {
           role: "member",
           joined_at: NOW().toISOString()
         });
-
-        createNotification({
-          userId: jam.host_user_id,
-          type: "jam_member_joined",
-          title: "New jam member",
-          message: `${auth.user.display_name || auth.user.email} joined ${jam.name}.`,
-          entityType: "jam",
-          entityId: jam.id
-        });
       }
     }
+    markStoreDirty();
 
     res.json({ response });
   });
@@ -1047,6 +1593,7 @@ export function registerPlannerApi(app) {
     };
 
     store.plans.push(plan);
+    markStoreDirty();
     res.json({ plan_id: plan.id, request_id: plan.id, options: plan.options });
   });
 
@@ -1075,6 +1622,7 @@ export function registerPlannerApi(app) {
 
     const recommendations = rankedRecommendations(auth.userId, { weather: "clear", timeOfDay: "evening" });
     plan.options = generatePlanOptions({ constraints: plan.constraints_json || {}, recommendations });
+    markStoreDirty();
 
     res.json({ plan });
   });
@@ -1106,6 +1654,7 @@ export function registerPlannerApi(app) {
         plan.status = "finalized";
       }
     }
+    markStoreDirty();
 
     res.json({ participant, plan });
   });
@@ -1131,15 +1680,7 @@ export function registerPlannerApi(app) {
       role: "host",
       joined_at: NOW().toISOString()
     });
-
-    createNotification({
-      userId: auth.userId,
-      type: "jam_created",
-      title: "Jam created",
-      message: `${jam.name} is live. Share code ${jam.code} to invite others.`,
-      entityType: "jam",
-      entityId: jam.id
-    });
+    markStoreDirty();
 
     res.json({ jam, link: `/jam/${code}` });
   });
@@ -1173,16 +1714,8 @@ export function registerPlannerApi(app) {
         role: "member",
         joined_at: NOW().toISOString()
       });
-
-      createNotification({
-        userId: jam.host_user_id,
-        type: "jam_accepted",
-        title: "Jam invite accepted",
-        message: `${auth.user.display_name || auth.user.email} accepted your jam invite.`,
-        entityType: "jam",
-        entityId: jam.id
-      });
     }
+    markStoreDirty();
 
     res.json({ accepted: true, jam });
   });
@@ -1198,58 +1731,8 @@ export function registerPlannerApi(app) {
     }
 
     store.jamMembers = store.jamMembers.filter((member) => !(member.jam_id === jam.id && member.user_id === auth.userId));
-
-    createNotification({
-      userId: jam.host_user_id,
-      type: "jam_declined",
-      title: "Jam invite declined",
-      message: `${auth.user.display_name || auth.user.email} declined your jam invite.`,
-      entityType: "jam",
-      entityId: jam.id
-    });
+    markStoreDirty();
     res.json({ declined: true, jam });
-  });
-
-  app.get("/api/notifications", (req, res) => {
-    const auth = requireSession(req, res);
-    if (!auth) return;
-
-    const items = store.notifications
-      .filter((notification) => notification.user_id === auth.userId)
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-
-    const unread_count = items.filter((notification) => !notification.read).length;
-    res.json({ notifications: items, unread_count });
-  });
-
-  app.post("/api/notifications/:id/read", (req, res) => {
-    const auth = requireSession(req, res);
-    if (!auth) return;
-
-    const notification = store.notifications.find(
-      (candidate) => candidate.id === req.params.id && candidate.user_id === auth.userId
-    );
-    if (!notification) {
-      res.status(404).json({ error: "Notification not found" });
-      return;
-    }
-
-    notification.read = true;
-    res.json({ notification });
-  });
-
-  app.post("/api/notifications/read-all", (req, res) => {
-    const auth = requireSession(req, res);
-    if (!auth) return;
-
-    let updated = 0;
-    store.notifications.forEach((notification) => {
-      if (notification.user_id !== auth.userId || notification.read) return;
-      notification.read = true;
-      updated += 1;
-    });
-
-    res.json({ updated });
   });
 
   app.get("/api/study/tasks", (req, res) => {
@@ -1281,6 +1764,7 @@ export function registerPlannerApi(app) {
       done: false
     };
     store.studyTasks.push(task);
+    markStoreDirty();
 
     res.json({ task, study_load: computeStudyLoad(auth.userId) });
   });
@@ -1296,7 +1780,299 @@ export function registerPlannerApi(app) {
     }
 
     task.done = !task.done;
+    markStoreDirty();
     res.json({ task, study_load: computeStudyLoad(auth.userId) });
+  });
+
+  app.post("/api/agent/call/start", async (req, res) => {
+    const auth = requireSession(req, res);
+    if (!auth) return;
+
+    if (!canUseTwilio()) {
+      const missing = missingTwilioConfigKeys();
+      res.status(500).json({
+        error: "Twilio call feature is not configured. Please set Twilio credentials and TWILIO_PUBLIC_BASE_URL.",
+        missing
+      });
+      return;
+    }
+
+    const restaurantName = String(req.body?.restaurant_name || "Restaurant").trim();
+    const reservationTime = String(req.body?.reservation_time || "").trim();
+    const specialRequest = String(req.body?.special_request || "").trim();
+    const partySize = Math.max(1, Math.min(20, Number(req.body?.party_size || 2)));
+    const selectedGroupId = String(req.body?.group_id || "").trim();
+    const requestedTarget = normalizePhone(req.body?.target_number || DEMO_TARGET_NUMBER);
+    const allowedTarget = normalizePhone(DEMO_TARGET_NUMBER);
+
+    if (!reservationTime) {
+      res.status(400).json({ error: "reservation_time is required" });
+      return;
+    }
+    if (!selectedGroupId) {
+      res.status(400).json({ error: "group_id is required to notify one selected group on confirmation" });
+      return;
+    }
+    const selectedGroup = store.groups.find((group) => group.id === selectedGroupId && group.owner_user_id === auth.userId);
+    if (!selectedGroup && selectedGroupId !== "creator-only") {
+      res.status(404).json({ error: "Selected group not found" });
+      return;
+    }
+    if (!allowedTarget || requestedTarget !== allowedTarget) {
+      res.status(400).json({ error: "Only the configured DEMO_TARGET_NUMBER can be called in demo mode." });
+      return;
+    }
+
+    const voiceScript = await generateReservationCallScript({
+      restaurantName,
+      partySize,
+      reservationTime,
+      specialRequest
+    });
+
+    const jobId = randomUUID();
+    const nowIso = NOW().toISOString();
+    const job = {
+      job_id: jobId,
+      user_id: auth.userId,
+      restaurant_name: restaurantName,
+      reservation_time: reservationTime,
+      party_size: partySize,
+      special_request: specialRequest,
+      group_id: selectedGroupId,
+      target_number: allowedTarget,
+      caller_number: normalizePhone(TWILIO_PHONE_NUMBER),
+      status: "queued",
+      max_duration_seconds: RESERVATION_CALL_MAX_SECONDS,
+      max_retries: RESERVATION_CALL_MAX_RETRIES,
+      voice_script: voiceScript,
+      attempts: [],
+      retry_used: 0,
+      call_sid: null,
+      decision_digit: "",
+      reservation_decision: "pending",
+      sms_notifications: {
+        state: "pending",
+        sent: 0,
+        failed: 0,
+        recipients: 0,
+        errors: []
+      },
+      last_error: "",
+      created_at: nowIso,
+      updated_at: nowIso
+    };
+    store.reservationCallJobs.set(jobId, job);
+    markStoreDirty();
+
+    try {
+      await placeReservationCallAttempt(jobId, 0);
+      const next = store.reservationCallJobs.get(jobId);
+      res.status(201).json({ call_job: next });
+    } catch (error) {
+      const failed = store.reservationCallJobs.get(jobId);
+      failed.status = "failed";
+      failed.last_error = error instanceof Error ? error.message : "Could not place call";
+      failed.updated_at = NOW().toISOString();
+      store.reservationCallJobs.set(jobId, failed);
+      markStoreDirty();
+      res.status(502).json({ error: failed.last_error });
+    }
+  });
+
+  app.get("/api/agent/call/:jobId", (req, res) => {
+    const auth = requireSession(req, res);
+    if (!auth) return;
+    const job = store.reservationCallJobs.get(req.params.jobId);
+    if (!job || job.user_id !== auth.userId) {
+      res.status(404).json({ error: "Call job not found" });
+      return;
+    }
+    res.json({ call_job: job });
+  });
+
+  app.post("/api/twilio/voice/reservation-twiml", (req, res) => {
+    const twiml = new twilio.twiml.VoiceResponse();
+    try {
+      const jobId = String(req.query?.jobId || "");
+      const job = store.reservationCallJobs.get(jobId);
+
+      if (!job) {
+        twiml.say({ voice: "alice", language: "en-US" }, "This reservation request is no longer available. Goodbye.");
+        twiml.hangup();
+        res.status(200).type("text/xml").send(twiml.toString());
+        return;
+      }
+
+      twiml.say({ voice: "alice", language: "en-US" }, job.voice_script || "Hello. This is a reservation request.");
+      twiml.pause({ length: 1 });
+      const gather = twiml.gather({
+        input: "dtmf",
+        numDigits: 1,
+        action: twilioWebhookUrl(`/api/twilio/voice/input?jobId=${encodeURIComponent(jobId)}`),
+        method: "POST",
+        timeout: 7,
+        actionOnEmptyResult: true
+      });
+      gather.say(
+        { voice: "alice", language: "en-US" },
+        "To confirm this reservation request, press 1. If this time does not work, press 2."
+      );
+      twiml.say({ voice: "alice", language: "en-US" }, "No selection received. This request will be marked as declined due to timeout.");
+      twiml.hangup();
+
+      job.status = "in-progress";
+      job.updated_at = NOW().toISOString();
+      store.reservationCallJobs.set(jobId, job);
+      markStoreDirty();
+
+      res.status(200).type("text/xml").send(twiml.toString());
+    } catch {
+      twiml.say({ voice: "alice", language: "en-US" }, "We are unable to process this request right now. Goodbye.");
+      twiml.hangup();
+      res.status(200).type("text/xml").send(twiml.toString());
+    }
+  });
+
+  app.post("/api/twilio/voice/input", async (req, res) => {
+    const twiml = new twilio.twiml.VoiceResponse();
+    try {
+      const jobId = String(req.query?.jobId || "");
+      const digit = String(req.body?.Digits || "").trim();
+      const job = store.reservationCallJobs.get(jobId);
+      if (!job) {
+        twiml.say({ voice: "alice", language: "en-US" }, "This reservation request has expired. Goodbye.");
+        twiml.hangup();
+        res.status(200).type("text/xml").send(twiml.toString());
+        return;
+      }
+
+      job.decision_digit = digit;
+
+      if (digit === "1") {
+        job.reservation_decision = "confirmed";
+        job.status = "reservation-confirmed";
+        twiml.say({ voice: "alice", language: "en-US" }, "Thank you. Reservation confirmed.");
+        const smsResult = await sendGroupReservationSms({
+          userId: job.user_id,
+          groupId: job.group_id,
+          restaurantName: job.restaurant_name,
+          partySize: job.party_size,
+          reservationTime: job.reservation_time
+        });
+        const smsState = smsResult.errors.length > 0 && smsResult.sent === 0 && smsResult.recipients.length === 0
+          ? "paused"
+          : smsResult.failed > 0
+            ? "partial"
+            : "sent";
+        job.sms_notifications = {
+          state: smsState,
+          sent: smsResult.sent,
+          failed: smsResult.failed,
+          recipients: smsResult.recipients.length,
+          errors: smsResult.errors
+        };
+      } else if (digit === "2") {
+        job.reservation_decision = "declined";
+        job.status = "reservation-declined";
+        twiml.say({ voice: "alice", language: "en-US" }, "Thank you. We have marked this request as declined.");
+      } else if (!digit) {
+        job.decision_digit = "2";
+        job.reservation_decision = "declined-timeout";
+        job.status = "reservation-timeout";
+        twiml.say({ voice: "alice", language: "en-US" }, "No selection received. This request is marked as declined due to timeout.");
+      } else {
+        job.reservation_decision = "no-response";
+        job.status = "awaiting-followup";
+        twiml.say({ voice: "alice", language: "en-US" }, "No valid selection was received.");
+      }
+
+      job.updated_at = NOW().toISOString();
+      store.reservationCallJobs.set(jobId, job);
+      markStoreDirty();
+    } catch {
+      twiml.say({ voice: "alice", language: "en-US" }, "We could not process that input right now.");
+    }
+
+    twiml.say({ voice: "alice", language: "en-US" }, "Goodbye.");
+    twiml.hangup();
+    res.status(200).type("text/xml").send(twiml.toString());
+  });
+
+  app.post("/api/twilio/voice/status", async (req, res) => {
+    const jobId = String(req.query?.jobId || "");
+    const attemptIndex = Number(req.query?.attempt || 0);
+    const callStatus = String(req.body?.CallStatus || "").toLowerCase();
+    const callSid = String(req.body?.CallSid || "");
+    const job = store.reservationCallJobs.get(jobId);
+
+    if (!job) {
+      res.status(200).json({ ok: true });
+      return;
+    }
+
+    const attempts = Array.isArray(job.attempts) ? [...job.attempts] : [];
+    const idx = attempts.findIndex((item) => item.attempt_index === attemptIndex || item.call_sid === callSid);
+    if (idx >= 0) {
+      attempts[idx] = {
+        ...attempts[idx],
+        status: callStatus || attempts[idx].status,
+        call_sid: callSid || attempts[idx].call_sid,
+        updated_at: NOW().toISOString()
+      };
+    }
+    job.attempts = attempts;
+
+    const retryableStatuses = new Set(["busy", "failed", "no-answer", "canceled"]);
+    if (retryableStatuses.has(callStatus)) {
+      if ((job.retry_used || 0) < RESERVATION_CALL_MAX_RETRIES) {
+        job.retry_used = (job.retry_used || 0) + 1;
+        job.status = "retrying";
+        job.updated_at = NOW().toISOString();
+        store.reservationCallJobs.set(jobId, job);
+        markStoreDirty();
+        try {
+          await placeReservationCallAttempt(jobId, attemptIndex + 1);
+        } catch (error) {
+          const next = store.reservationCallJobs.get(jobId);
+          next.status = "failed";
+          next.last_error = error instanceof Error ? error.message : "Retry attempt failed";
+          next.updated_at = NOW().toISOString();
+          store.reservationCallJobs.set(jobId, next);
+          markStoreDirty();
+        }
+        res.status(200).json({ ok: true, retried: true });
+        return;
+      }
+      job.status = "failed";
+      job.updated_at = NOW().toISOString();
+      store.reservationCallJobs.set(jobId, job);
+      markStoreDirty();
+      res.status(200).json({ ok: true });
+      return;
+    }
+
+    const decisionLocked = new Set(["reservation-confirmed", "reservation-declined"]);
+    if (decisionLocked.has(job.status)) {
+      job.updated_at = NOW().toISOString();
+      store.reservationCallJobs.set(jobId, job);
+      markStoreDirty();
+      res.status(200).json({ ok: true, decision_locked: true });
+      return;
+    }
+
+    if (callStatus === "completed") {
+      job.status = job.status === "awaiting-followup" ? "awaiting-followup" : "completed";
+    } else if (callStatus === "answered") {
+      job.status = "in-progress";
+    } else if (callStatus === "ringing" || callStatus === "queued" || callStatus === "initiated") {
+      job.status = "calling";
+    }
+
+    job.updated_at = NOW().toISOString();
+    store.reservationCallJobs.set(jobId, job);
+    markStoreDirty();
+    res.status(200).json({ ok: true });
   });
 
   app.post("/api/agent/chat", async (req, res) => {
@@ -1309,159 +2085,202 @@ export function registerPlannerApi(app) {
       return;
     }
 
-    const context = normalizeChatContext(req.body?.context, auth.userId);
-    const intent = parseMessageIntent(message);
+    const context = req.body?.context || {};
+    const userContext = summarizeUserContext(auth.userId, context);
     const recommendations = rankedRecommendations(auth.userId, {
       weather: context.weather || "clear",
-      timeOfDay: context.time_of_day || "evening",
-      requestedCategories: intent.requestedCategories,
-      strictCategoryMatch: intent.strictCategoryMatch
+      timeOfDay: context.timeOfDay || "evening"
     });
 
-    const cards = recommendations.slice(0, 3).map((item) => ({
+    const cards = recommendations.slice(0, 5).map((item) => ({
       id: item.id,
       title: item.title,
       subtitle: item.description,
       deep_link: item.link,
       reason_tags: item.reason_tags,
-      category: item.category,
       score: item.score
     }));
 
-    const proposedActions = [];
-    const lower = message.toLowerCase();
-
-    if (lower.includes("plan")) {
-      const actionId = randomUUID();
-      const payload = {
-        type: "create_plan_draft",
-        title: "AI Draft Plan",
-        constraints: { timeOfDay: "evening", weather: "clear", durationMin: 120 }
-      };
-      store.pendingActions.set(actionId, payload);
-      proposedActions.push({ action_id: actionId, type: payload.type, payload, requires_confirmation: true });
-    }
-
-    if (lower.includes("rsvp") || lower.includes("confirm")) {
-      const actionId = randomUUID();
-      const payload = {
-        type: "rsvp_event",
-        item_id: cards[0]?.id || store.eventsCatalog[0].id,
-        state: "confirmed"
-      };
-      store.pendingActions.set(actionId, payload);
-      proposedActions.push({ action_id: actionId, type: payload.type, payload, requires_confirmation: true });
-    }
-
-    if (lower.includes("jam")) {
-      const actionId = randomUUID();
-      const payload = { type: "join_jam", code: "DEMO42" };
-      store.pendingActions.set(actionId, payload);
-      proposedActions.push({ action_id: actionId, type: payload.type, payload, requires_confirmation: true });
-    }
-
-    if (lower.includes("task") || lower.includes("study")) {
-      const actionId = randomUUID();
-      const payload = {
-        type: "add_study_task",
-        title: "AI-added study block",
-        due_at: new Date(Date.now() + 1000 * 60 * 60 * 24).toISOString(),
-        course: "General"
-      };
-      store.pendingActions.set(actionId, payload);
-      proposedActions.push({ action_id: actionId, type: payload.type, payload, requires_confirmation: true });
-    }
-
-    if (lower.includes("book") || lower.includes("reservation") || lower.includes("zipcar")) {
-      const actionId = randomUUID();
-      const payload = { type: "create_booking_intent", provider: "external", item_id: cards[0]?.id || "event-brew-quiet" };
-      store.pendingActions.set(actionId, payload);
-      proposedActions.push({ action_id: actionId, type: payload.type, payload, requires_confirmation: true });
-    }
-
-    const aiReply = await generateStructuredAssistantReply({
+    const proposedActions = inferProposedActions({
+      userId: auth.userId,
       message,
-      context,
       cards,
-      proposedActions
+      userContext
     });
 
-    const chatId = randomUUID();
+    const assistantText = await generateAssistantReply({
+      message,
+      context: userContext,
+      cards,
+      proposedActions,
+      capabilities: [
+        "plan_draft",
+        "rsvp_event",
+        "join_jam",
+        "add_study_task",
+        "booking_intent",
+        "calendar/canvas connection-aware recommendations",
+        "study-load-aware prioritization"
+      ]
+    });
+
     store.aiActionLogs.push({
-      id: chatId,
+      id: randomUUID(),
       user_id: auth.userId,
       prompt: message,
-      context_json: context,
-      cards_json: cards,
-      assistant_text: aiReply.assistant_text,
       proposed_actions_json: proposedActions,
       confirmed_action_id: null,
-      feedback_events: [],
       created_at: NOW().toISOString()
     });
 
-    const finalCards = sanitizeCardsForIntent(aiReply.cards || cards, cards, intent);
-
     res.json({
-      chat_id: chatId,
-      assistant_text: aiReply.assistant_text,
-      cards: finalCards,
-      proposed_actions: aiReply.proposed_actions || proposedActions
+      assistant_text: assistantText,
+      cards,
+      proposed_actions: proposedActions,
+      context_used: userContext
     });
   });
 
-  app.post("/api/agent/feedback", (req, res) => {
+  app.get("/api/agent/context", (req, res) => {
+    const auth = requireSession(req, res);
+    if (!auth) return;
+    const clientContext = {
+      weather: String(req.query.weather || "clear"),
+      timeOfDay: String(req.query.timeOfDay || "evening"),
+      activeScreen: String(req.query.activeScreen || "/jarvis")
+    };
+    res.json({
+      user_context: summarizeUserContext(auth.userId, clientContext),
+      recommendations: rankedRecommendations(auth.userId, clientContext).slice(0, 5)
+    });
+  });
+
+  app.post("/api/agent/image-generate", async (req, res) => {
     const auth = requireSession(req, res);
     if (!auth) return;
 
-    const rawSignal = String(req.body?.signal || "").trim().toLowerCase();
-    const signal = rawSignal === "helpful" || rawSignal === "up" ? "up" : rawSignal === "not_fit" || rawSignal === "down" ? "down" : null;
-    if (!signal) {
-      res.status(400).json({ error: "signal is required: helpful|not_fit (or up|down)" });
+    const prompt = String(req.body?.prompt || "").trim();
+    const requestedSize = String(req.body?.size || "1024x1024").trim();
+    const allowedSizes = new Set(["1024x1024", "1024x1536", "1536x1024"]);
+    const size = allowedSizes.has(requestedSize) ? requestedSize : "1024x1024";
+
+    if (!prompt) {
+      res.status(400).json({ error: "prompt is required" });
       return;
     }
 
-    const chatId = String(req.body?.chat_id || "").trim();
-    const cardIds = Array.isArray(req.body?.card_ids)
-      ? req.body.card_ids.map((id) => String(id)).filter(Boolean).slice(0, 10)
-      : [];
-    const note = String(req.body?.note || "").trim().slice(0, 500);
-
-    const feedback = {
-      id: randomUUID(),
-      user_id: auth.userId,
-      signal,
-      card_ids: cardIds,
-      note,
-      created_at: NOW().toISOString()
-    };
-
-    let attached_to_chat = false;
-    if (chatId) {
-      const log = store.aiActionLogs.find((row) => row.id === chatId && row.user_id === auth.userId);
-      if (log) {
-        if (!Array.isArray(log.feedback_events)) log.feedback_events = [];
-        log.feedback_events.push(feedback);
-        attached_to_chat = true;
-      }
+    if (!process.env.OPENAI_API_KEY) {
+      res.status(500).json({ error: "OPENAI_API_KEY is missing on backend." });
+      return;
     }
 
-    if (!attached_to_chat) {
-      store.aiActionLogs.push({
-        id: randomUUID(),
-        user_id: auth.userId,
-        prompt: String(req.body?.prompt || "").trim(),
-        context_json: req.body?.context || {},
-        cards_json: [],
-        assistant_text: "",
-        proposed_actions_json: [],
-        confirmed_action_id: null,
-        feedback_events: [feedback],
-        created_at: NOW().toISOString()
+    try {
+      if (!openai) {
+        openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+      }
+
+      const response = await openai.images.generate({
+        model: "gpt-image-1",
+        prompt,
+        size
+      });
+
+      const generated = response?.data?.[0];
+      const b64 = generated?.b64_json;
+      const imageUrl = generated?.url || (b64 ? `data:image/png;base64,${b64}` : "");
+
+      if (!imageUrl) {
+        res.status(502).json({ error: "Image generation returned no image payload." });
+        return;
+      }
+
+      res.json({
+        image_url: imageUrl,
+        revised_prompt: generated?.revised_prompt || null,
+        size
+      });
+    } catch (error) {
+      res.status(502).json({
+        error: error instanceof Error ? error.message : "Image generation failed"
       });
     }
+  });
 
-    res.json({ ok: true, feedback, attached_to_chat });
+  app.post("/api/agent/image-generate-personalized", async (req, res) => {
+    const auth = requireSession(req, res);
+    if (!auth) return;
+
+    const placeName = String(req.body?.place_name || "San Luis Obispo destination").trim();
+    const city = String(req.body?.city || "San Luis Obispo").trim();
+    const category = String(req.body?.category || "activity").trim();
+    const basePrompt = String(req.body?.prompt || "").trim();
+    const headCircle = String(req.body?.head_circle || "").trim();
+    const requestedSize = String(req.body?.size || "1024x1024").trim();
+    const allowedSizes = new Set(["1024x1024", "1024x1536", "1536x1024"]);
+    const size = allowedSizes.has(requestedSize) ? requestedSize : "1024x1024";
+
+    if (!headCircle || !headCircle.startsWith("data:image/")) {
+      res.status(400).json({ error: "head_circle image data URL is required." });
+      return;
+    }
+
+    if (!process.env.OPENAI_API_KEY) {
+      res.status(500).json({ error: "OPENAI_API_KEY is missing on backend." });
+      return;
+    }
+
+    const scenarioPrompt = basePrompt || `Create a photorealistic travel photo of this exact person at ${placeName} in ${city}. The activity vibe should match ${category}. Keep face identity consistent, natural lighting, realistic proportions, and believable scene composition.`;
+
+    try {
+      if (!openai) {
+        openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+      }
+
+      const match = headCircle.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+      if (!match) {
+        res.status(400).json({ error: "Invalid head_circle data URL format." });
+        return;
+      }
+      const mime = match[1];
+      const b64 = match[2];
+      const bytes = Buffer.from(b64, "base64");
+      const ext = mime.includes("png") ? "png" : "jpg";
+      const file = new File([bytes], `head-circle.${ext}`, { type: mime });
+
+      let generated = null;
+      try {
+        const edited = await openai.images.edit({
+          model: "gpt-image-1",
+          image: file,
+          prompt: scenarioPrompt,
+          size
+        });
+        generated = edited?.data?.[0] || null;
+      } catch {
+        const fallback = await openai.images.generate({
+          model: "gpt-image-1",
+          prompt: `${scenarioPrompt} Keep the same person from the provided profile head reference.`,
+          size
+        });
+        generated = fallback?.data?.[0] || null;
+      }
+
+      const outUrl = generated?.url || (generated?.b64_json ? `data:image/png;base64,${generated.b64_json}` : "");
+      if (!outUrl) {
+        res.status(502).json({ error: "Personalized image generation returned no image payload." });
+        return;
+      }
+
+      res.json({
+        image_url: outUrl,
+        revised_prompt: generated?.revised_prompt || null,
+        size
+      });
+    } catch (error) {
+      res.status(502).json({
+        error: error instanceof Error ? error.message : "Personalized image generation failed"
+      });
+    }
   });
 
   app.post("/api/agent/actions/:actionId/confirm", (req, res) => {
@@ -1489,6 +2308,7 @@ export function registerPlannerApi(app) {
         options: generatePlanOptions({ constraints: action.constraints, recommendations })
       };
       store.plans.push(plan);
+      markStoreDirty();
       result = { plan_id: plan.id, deep_link: `/plans/${plan.id}` };
     }
 
@@ -1502,6 +2322,7 @@ export function registerPlannerApi(app) {
         created_at: NOW().toISOString()
       };
       store.userEventStates.push(row);
+      markStoreDirty();
       result = { event_id: row.event_id, state: row.state };
     }
 
@@ -1522,6 +2343,7 @@ export function registerPlannerApi(app) {
         done: false
       };
       store.studyTasks.push(task);
+      markStoreDirty();
       result = { task_id: task.id, title: task.title };
     }
 
@@ -1533,15 +2355,8 @@ export function registerPlannerApi(app) {
       };
     }
 
-    const chatId = String(req.body?.chat_id || "").trim();
-    if (chatId) {
-      const log = store.aiActionLogs.find((row) => row.id === chatId && row.user_id === auth.userId);
-      if (log) {
-        log.confirmed_action_id = req.params.actionId;
-      }
-    }
-
     store.pendingActions.delete(req.params.actionId);
+    markStoreDirty();
     res.json({ confirmed: true, action_type: action.type, result });
   });
 
