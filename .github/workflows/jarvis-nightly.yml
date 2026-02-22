@@ -1,0 +1,123 @@
+name: Jarvis Nightly Agents
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 2:10am Los Angeles is 10:10 UTC during standard time; adjust if needed
+    - cron: "10 10 * * *"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: jarvis-nightly
+  cancel-in-progress: false
+
+jobs:
+  agent:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        task:
+          - reco_dummy
+          - reservation_idempotency
+          - seed_mock_users
+          - logging_and_artifacts
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config user.name "jarvis-bot"
+          git config user.email "jarvis-bot@users.noreply.github.com"
+
+      - name: Create branch for this agent
+        id: branch
+        run: |
+          BRANCH="jarvis/${{ matrix.task }}/run-${{ github.run_id }}"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          git checkout -b "$BRANCH"
+
+      - name: Run Codex agent task
+        uses: openai/codex-action@v1
+        with:
+          openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+          prompt_file: .jarvis/tasks/${{ matrix.task }}.md
+
+      - name: Run tests (best effort)
+        continue-on-error: true
+        run: |
+          if [ -f package.json ]; then
+            corepack enable || true
+            npm ci || npm install || true
+            npm test || true
+          fi
+          if [ -f pyproject.toml ] || [ -f requirements.txt ]; then
+            python -m pip install -U pip || true
+            [ -f requirements.txt ] && pip install -r requirements.txt || true
+            pytest -q || true
+          fi
+
+      - name: Collect logs and diffs
+        if: always()
+        run: |
+          mkdir -p jarvis_artifacts
+          git status --porcelain=v1 > jarvis_artifacts/git_status.txt || true
+          git diff > jarvis_artifacts/git_diff.patch || true
+          echo "${{ matrix.task }}" > jarvis_artifacts/task.txt
+          date -u > jarvis_artifacts/utc_time.txt
+
+      - name: Add app logs to artifacts (if present)
+        if: always()
+        run: |
+          if [ -d logs ]; then
+            mkdir -p jarvis_artifacts/logs
+            cp -R logs/* jarvis_artifacts/logs/ || true
+          fi
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jarvis-${{ matrix.task }}-${{ github.run_id }}
+          path: jarvis_artifacts
+          retention-days: 14
+
+      - name: Commit changes (if any)
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            git add -A
+            git commit -m "Jarvis: ${{ matrix.task }} (run ${{ github.run_id }})"
+          else
+            echo "No changes to commit."
+          fi
+
+      - name: Push branch (if commit exists)
+        run: |
+          if [ -n "$(git log origin/main..HEAD --oneline)" ]; then
+            git push -u origin "${{ steps.branch.outputs.branch }}" || true
+          else
+            echo "No commits beyond main; skipping push."
+          fi
+
+      - name: Open PR (if changes exist)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -n "$(git log origin/main..HEAD --oneline)" ]; then
+            gh pr create \
+              --title "Jarvis: ${{ matrix.task }} (run ${{ github.run_id }})" \
+              --body "Automated by Jarvis nightly agents.\n\nArtifacts: see workflow run artifacts for logs/diffs." \
+              --base main \
+              --head "${{ steps.branch.outputs.branch }}" \
+              || true
+          else
+            echo "No commits beyond main; skipping PR."
+          fi
