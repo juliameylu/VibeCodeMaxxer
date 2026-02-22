@@ -12,8 +12,8 @@ export default function MobileShell({ children, showFab = true, fabTo = "/focus"
   const location = useLocation();
 
   return (
-    <div className="min-h-screen px-3 py-6 sm:py-8">
-      <div className="phone-shell animate-scale-in">
+    <div className="min-h-screen px-3 py-4 sm:py-6">
+      <div className="phone-shell animate-scale-in pb-28">
         {children}
 
         <div className="pointer-events-none absolute inset-x-0 bottom-4 flex justify-center">
@@ -27,28 +27,28 @@ export default function MobileShell({ children, showFab = true, fabTo = "/focus"
             </Link>
           )}
         </div>
-
-        <nav className="absolute inset-x-3 bottom-3 rounded-[20px] border border-white/60 bg-white/75 px-3 py-2 backdrop-blur">
-          <ul className="grid grid-cols-4 gap-1">
-            {NAV_ITEMS.map(({ to, label, icon: Icon }) => {
-              const isActive = location.pathname === to;
-              return (
-                <li key={to}>
-                  <Link
-                    to={to}
-                    className={`flex flex-col items-center rounded-2xl px-2 py-2 text-xs font-semibold transition ${
-                      isActive ? "bg-amberSoft/20 text-ink" : "text-ink/55"
-                    }`}
-                  >
-                    <Icon size={17} />
-                    <span>{label}</span>
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
-        </nav>
       </div>
+
+      <nav className="fixed bottom-3 left-1/2 z-40 w-[calc(100%-1.5rem)] max-w-[430px] -translate-x-1/2 rounded-[20px] border border-[#95ff6d47] bg-[#0a250d]/90 px-3 py-2 backdrop-blur">
+        <ul className="grid grid-cols-4 gap-1">
+          {NAV_ITEMS.map(({ to, label, icon: Icon }) => {
+            const isActive = location.pathname === to;
+            return (
+              <li key={to}>
+                <Link
+                  to={to}
+                  className={`flex flex-col items-center rounded-2xl px-2 py-2 text-xs font-semibold transition ${
+                    isActive ? "bg-[#8ff45133] text-[#95f665]" : "text-[#9db99b]"
+                  }`}
+                >
+                  <Icon size={17} />
+                  <span>{label}</span>
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+      </nav>
     </div>
   );
 }
