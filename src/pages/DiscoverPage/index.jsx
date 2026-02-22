@@ -1,6 +1,7 @@
 import { MapPin, Sparkles, Star } from "lucide-react";
 import { useState } from "react";
 import MobileShell from "../../components/MobileShell";
+import { withApiBase } from "../../lib/api/baseUrl";
 
 const SPOTS = [
   { id: 1, name: "The Brew", hint: "Quiet seating until 6 PM", distance: "0.3 mi" },
@@ -22,7 +23,7 @@ export default function DiscoverPage() {
     setError("");
 
     try {
-      const response = await fetch("/api/agent/chat", {
+      const response = await fetch(withApiBase("/api/agent/chat"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

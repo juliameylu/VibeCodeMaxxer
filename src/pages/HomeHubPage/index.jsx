@@ -3,15 +3,36 @@ import { Link } from "react-router-dom";
 import AppShell from "../../lib/pageshell/AppShell";
 import { apiFetch } from "../../lib/apiClient";
 
+const DEFAULT_HOME_DATA = {
+  recommendations: [],
+  study_load: null,
+  badges: { calendar: false, canvas: false },
+  due_today: false
+};
+
+function normalizeHomeData(payload) {
+  const source = payload && typeof payload === "object" ? payload : {};
+  return {
+    ...DEFAULT_HOME_DATA,
+    ...source,
+    recommendations: Array.isArray(source.recommendations) ? source.recommendations : [],
+    badges: {
+      ...DEFAULT_HOME_DATA.badges,
+      ...(source.badges && typeof source.badges === "object" ? source.badges : {})
+    },
+    due_today: Boolean(source.due_today)
+  };
+}
+
 export default function HomeHubPage() {
-  const [data, setData] = useState({ recommendations: [], study_load: null, badges: { calendar: false, canvas: false }, due_today: false });
+  const [data, setData] = useState(DEFAULT_HOME_DATA);
   const [error, setError] = useState("");
 
   useEffect(() => {
     let active = true;
     apiFetch("/api/home/recommendations")
       .then((response) => {
-        if (active) setData(response);
+        if (active) setData(normalizeHomeData(response));
       })
       .catch((fetchError) => {
         if (active) setError(fetchError.message);
@@ -49,7 +70,7 @@ export default function HomeHubPage() {
       </section>
 
       <section className="space-y-2">
-        {data.recommendations.map((item) => (
+        {(Array.isArray(data.recommendations) ? data.recommendations : []).map((item) => (
           <article key={item.id} className="row-pill">
             <div className="flex items-start justify-between">
               <div>

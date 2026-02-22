@@ -1,4 +1,4 @@
-const API_BASE = "";
+import { withApiBase } from "./api/baseUrl";
 
 function getSessionToken() {
   return localStorage.getItem("slo_session_token") || "";
@@ -15,7 +15,7 @@ export async function apiFetch(path, { method = "GET", body, headers = {}, withA
     if (token) mergedHeaders["x-session-token"] = token;
   }
 
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await fetch(withApiBase(path), {
     method,
     headers: mergedHeaders,
     body: body ? JSON.stringify(body) : undefined

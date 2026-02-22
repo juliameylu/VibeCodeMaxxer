@@ -13,7 +13,7 @@ export default function AppShell({ title, subtitle, children }) {
   const location = useLocation();
 
   return (
-    <div className="min-h-screen px-3 py-6 sm:py-8">
+    <div className="min-h-[100dvh] overflow-x-hidden px-3 pt-6 pb-[calc(env(safe-area-inset-bottom)+1rem)] sm:py-8">
       <div className="phone-shell mx-auto w-full max-w-[450px] pb-24">
         <header className="glass-card p-4">
           <div className="flex items-start justify-between gap-3">

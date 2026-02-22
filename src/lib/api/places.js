@@ -1,5 +1,6 @@
 import fixtures from "../../mocks/fixtures/places.json";
 import { httpGetJson } from "./http";
+import { withApiBase } from "./baseUrl";
 
 const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === "true";
 
@@ -67,5 +68,5 @@ export async function searchPlaces(params = {}) {
     pageSize: String(params.pageSize || 8),
   });
 
-  return httpGetJson(`/api/places?${search.toString()}`);
+  return httpGetJson(withApiBase(`/api/places?${search.toString()}`));
 }

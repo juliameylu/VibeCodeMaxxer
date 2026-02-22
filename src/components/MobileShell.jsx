@@ -12,7 +12,7 @@ export default function MobileShell({ children, showFab = true, fabTo = "/focus"
   const location = useLocation();
 
   return (
-    <div className="min-h-screen px-3 py-6 sm:py-8">
+    <div className="min-h-[100dvh] overflow-x-hidden px-3 pt-6 pb-[calc(env(safe-area-inset-bottom)+1rem)] sm:py-8">
       <div className="phone-shell animate-scale-in">
         {children}
 

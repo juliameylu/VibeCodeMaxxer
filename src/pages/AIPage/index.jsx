@@ -104,8 +104,9 @@ export default function AIPage() {
 
   useEffect(() => {
     if (!callJob?.job_id) return undefined;
-    const terminal = new Set(["completed", "failed", "reservation-confirmed", "reservation-declined", "reservation-timeout", "awaiting-followup"]);
-    if (terminal.has(callJob.status)) return undefined;
+    const statusTerminal = new Set(["failed", "reservation-confirmed", "reservation-declined", "reservation-timeout", "awaiting-followup"]);
+    const completedWithDecision = callJob.status === "completed" && callJob.reservation_decision !== "pending";
+    if (statusTerminal.has(callJob.status) || completedWithDecision) return undefined;
 
     const timer = setInterval(async () => {
       try {

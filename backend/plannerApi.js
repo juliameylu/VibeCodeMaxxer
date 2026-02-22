@@ -1880,7 +1880,7 @@ export function registerPlannerApi(app) {
       return;
     }
 
-    const decisionLocked = new Set(["reservation-confirmed", "reservation-declined"]);
+    const decisionLocked = new Set(["reservation-confirmed", "reservation-declined", "reservation-timeout", "awaiting-followup"]);
     if (decisionLocked.has(job.status)) {
       job.updated_at = NOW().toISOString();
       store.reservationCallJobs.set(jobId, job);

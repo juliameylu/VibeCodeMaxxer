@@ -1,5 +1,6 @@
 import fixtures from "../../mocks/fixtures/events.json";
 import { httpGetJson } from "./http";
+import { withApiBase } from "./baseUrl";
 
 const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === "true";
 
@@ -56,5 +57,5 @@ export async function fetchCampusEvents(params = {}) {
     query: params.query || "",
   });
 
-  return httpGetJson(`/api/events?${search.toString()}`);
+  return httpGetJson(withApiBase(`/api/events?${search.toString()}`));
 }
