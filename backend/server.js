@@ -6,6 +6,7 @@ import { registerPlannerApi } from "./plannerApi.js";
 
 const app = express();
 const PORT = Number(process.env.BACKEND_PORT || 8787);
+const HOST = process.env.BACKEND_HOST || "0.0.0.0";
 const TARGET_URL = "https://www.fremontslo.com/shows/";
 const EVENTS_API_URL = new URL("/wp-json/tribe/events/v1/events?per_page=50", TARGET_URL).toString();
 const DEFAULT_SLOCAL_OUTDOOR_URL = "https://www.slocal.com/things-to-do/outdoor-activities/";
@@ -742,6 +743,6 @@ app.post("/api/import/proposed-trails-csv", async (req, res) => {
 
 registerPlannerApi(app);
 
-app.listen(PORT, () => {
-  console.log(`Fremont scraper backend running on http://localhost:${PORT}`);
+app.listen(PORT, HOST, () => {
+  console.log(`Fremont scraper backend running on http://${HOST}:${PORT}`);
 });
