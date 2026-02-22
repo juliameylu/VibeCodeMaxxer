@@ -8,6 +8,7 @@ import {
   getCalendarStatus,
   getPreferences,
   syncCalendar,
+  updatePreferences,
 } from "../api/backend";
 
 function nextSevenDayWindow() {
@@ -151,6 +152,29 @@ export function useUserCalendarState(selectedUser) {
     }
   }, [userEmail, userTimezone, data.user, runLinkFlow]);
 
+  const savePreferences = useCallback(async (payload) => {
+    if (!userEmail || !userTimezone) {
+      throw new Error("User context is missing.");
+    }
+
+    setError("");
+    const user =
+      data.user ||
+      (await createOrGetUser({
+        email: userEmail,
+        timezone: userTimezone,
+      }));
+
+    const next = await updatePreferences(user.user_id, payload);
+    setData((prev) => ({
+      ...prev,
+      user,
+      preferences: next,
+      lastAction: "Updated preferences",
+    }));
+    return next;
+  }, [userEmail, userTimezone, data.user]);
+
   useEffect(() => {
     load();
   }, [load]);
@@ -161,5 +185,6 @@ export function useUserCalendarState(selectedUser) {
     error,
     refresh: load,
     linkGoogleCalendar,
+    savePreferences,
   };
 }

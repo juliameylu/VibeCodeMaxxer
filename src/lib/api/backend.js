@@ -91,3 +91,28 @@ export async function getAvailability(userId, startTs, endTs) {
 export async function getCalendarEvents(userId) {
   return backendRequest(`/api/calendar/events/${userId}`);
 }
+
+export async function getMockReservationAvailability({
+  userId,
+  restaurantId,
+  restaurantName,
+  date,
+}) {
+  const search = new URLSearchParams();
+  if (userId) search.set("user_id", userId);
+  search.set("restaurant_id", restaurantId);
+  if (restaurantName) search.set("restaurant_name", restaurantName);
+  if (date) search.set("date", date);
+  return backendRequest(`/api/mock-reservations/availability?${search.toString()}`);
+}
+
+export async function bookMockReservation(payload) {
+  return backendRequest("/api/mock-reservations/book", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function getMockReservations(userId) {
+  return backendRequest(`/api/mock-reservations/${userId}`);
+}

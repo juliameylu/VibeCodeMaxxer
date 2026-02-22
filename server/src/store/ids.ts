@@ -2,6 +2,7 @@ let userCounter = 100;
 let calendarAccountCounter = 1;
 let windowCounter = 1;
 let oauthStateCounter = 1;
+let reservationCounter = 1;
 
 export function nextUserId(): string {
   userCounter += 1;
@@ -24,6 +25,12 @@ export function nextOauthState(): string {
   const value = String(oauthStateCounter).padStart(6, "0");
   oauthStateCounter += 1;
   return `state_${value}`;
+}
+
+export function nextReservationId(): string {
+  const value = String(reservationCounter).padStart(6, "0");
+  reservationCounter += 1;
+  return `rsv_${value}`;
 }
 
 export function shortStableSuffix(input: string): string {

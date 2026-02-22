@@ -65,10 +65,11 @@ export default function LoginPage() {
         <p className="text-xs font-semibold uppercase tracking-wide text-soft">Demo Users</p>
         <div className="mt-2 space-y-2 text-xs text-soft">
           {MOCK_USERS.map((user) => (
-            <div key={user.id} className="row-pill">
+            <div key={user.user_id} className="row-pill">
               <p className="font-semibold text-ink">{user.name}</p>
               <p>username: {user.username}</p>
               <p>password: {user.password}</p>
+              <p>user_id: {user.user_id}</p>
             </div>
           ))}
         </div>

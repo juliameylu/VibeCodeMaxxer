@@ -6,7 +6,7 @@ import {
   RefreshCw,
   Users,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import MobileShell from "../../components/MobileShell";
 import OverlapTimeline from "../../components/OverlapTimeline";
@@ -55,6 +55,13 @@ function overlapWindows(windowsA, windowsB) {
     .slice(0, 10);
 }
 
+function parseCsvList(value) {
+  return String(value || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 function UserSummaryCard({ label, userList, selectedId, onSelect, state }) {
   const isConnected = state.data.calendarStatus?.status === "connected";
 
@@ -69,7 +76,7 @@ function UserSummaryCard({ label, userList, selectedId, onSelect, state }) {
             className="rounded-xl border border-black/10 bg-white/80 px-2 py-1 text-xs text-ink"
           >
             {userList.map((user) => (
-              <option key={user.id} value={user.id}>
+              <option key={user.user_id} value={user.username}>
                 {user.name}
               </option>
             ))}
@@ -142,7 +149,15 @@ function UserSummaryCard({ label, userList, selectedId, onSelect, state }) {
 
 export default function ProfilePage() {
   const [session, setSessionState] = useState(() => getSession());
-  const [compareUserId, setCompareUserId] = useState("maria");
+  const [compareUsername, setCompareUsername] = useState("maria");
+  const [priceMax, setPriceMax] = useState("$$$");
+  const [distanceMaxM, setDistanceMaxM] = useState("3000");
+  const [dietTagsText, setDietTagsText] = useState("");
+  const [eventTagsText, setEventTagsText] = useState("");
+  const [favoriteCategoriesText, setFavoriteCategoriesText] = useState("");
+  const [prefsSaving, setPrefsSaving] = useState(false);
+  const [prefsStatus, setPrefsStatus] = useState("");
+  const [prefsError, setPrefsError] = useState("");
   const navigate = useNavigate();
 
   const primaryUser = useMemo(() => {
@@ -161,14 +176,27 @@ export default function ProfilePage() {
   }, [session]);
 
   const safeCompareId =
-    compareCandidates.find((user) => user.id === compareUserId)?.id ||
-    compareCandidates[0]?.id;
+    compareCandidates.find((user) => user.username === compareUsername)?.username ||
+    compareCandidates[0]?.username;
 
   const compareUser =
-    compareCandidates.find((user) => user.id === safeCompareId) || null;
+    compareCandidates.find((user) => user.username === safeCompareId) || null;
 
   const primaryState = useUserCalendarState(primaryUser);
   const compareState = useUserCalendarState(compareUser);
+
+  useEffect(() => {
+    const prefs = primaryState.data.preferences;
+    if (!prefs) return;
+
+    setPriceMax(prefs.price_max || "$$$");
+    setDistanceMaxM(String(Number.isFinite(prefs.distance_max_m) ? prefs.distance_max_m : 3000));
+    setDietTagsText(Array.isArray(prefs.diet_tags) ? prefs.diet_tags.join(", ") : "");
+    setEventTagsText(Array.isArray(prefs.event_tags) ? prefs.event_tags.join(", ") : "");
+    setFavoriteCategoriesText(
+      Array.isArray(prefs.favorite_categories) ? prefs.favorite_categories.join(", ") : "",
+    );
+  }, [primaryState.data.preferences]);
 
   const sharedWindows = useMemo(
     () =>
@@ -183,6 +211,34 @@ export default function ProfilePage() {
     clearSession();
     setSessionState(null);
     navigate("/login");
+  }
+
+  async function handleSavePreferences() {
+    const distanceValue = Number.parseInt(distanceMaxM, 10);
+    if (!Number.isInteger(distanceValue) || distanceValue < 0) {
+      setPrefsError("Distance must be a non-negative integer.");
+      setPrefsStatus("");
+      return;
+    }
+
+    setPrefsSaving(true);
+    setPrefsError("");
+    setPrefsStatus("");
+
+    try {
+      await primaryState.savePreferences({
+        price_max: priceMax,
+        distance_max_m: distanceValue,
+        diet_tags: parseCsvList(dietTagsText),
+        event_tags: parseCsvList(eventTagsText),
+        favorite_categories: parseCsvList(favoriteCategoriesText),
+      });
+      setPrefsStatus("Preferences saved.");
+    } catch (err) {
+      setPrefsError(err instanceof Error ? err.message : "Could not save preferences.");
+    } finally {
+      setPrefsSaving(false);
+    }
   }
 
   if (!session) {
@@ -243,10 +299,93 @@ export default function ProfilePage() {
             label="Compare User"
             userList={compareCandidates}
             selectedId={safeCompareId}
-            onSelect={setCompareUserId}
+            onSelect={setCompareUsername}
             state={compareState}
           />
         ) : null}
+      </section>
+
+      <section className="glass-card mt-4 p-4">
+        <h2 className="text-base font-bold text-ink">Recommendation Input (Testing)</h2>
+        <p className="mt-1 text-xs text-soft">
+          Edit profile preference fields and use them to seed restaurant recommendations.
+        </p>
+
+        <div className="mt-3 grid grid-cols-1 gap-3">
+          <label className="block">
+            <span className="text-xs font-semibold uppercase tracking-wide text-soft">Max Price</span>
+            <select
+              value={priceMax}
+              onChange={(event) => setPriceMax(event.target.value)}
+              className="mt-1 w-full rounded-xl border border-black/10 bg-white/80 px-3 py-2 text-sm text-ink outline-none"
+            >
+              <option value="$">$</option>
+              <option value="$$">$$</option>
+              <option value="$$$">$$$</option>
+              <option value="$$$$">$$$$</option>
+            </select>
+          </label>
+
+          <label className="block">
+            <span className="text-xs font-semibold uppercase tracking-wide text-soft">Max Distance (m)</span>
+            <input
+              type="number"
+              min={0}
+              step={100}
+              value={distanceMaxM}
+              onChange={(event) => setDistanceMaxM(event.target.value)}
+              className="mt-1 w-full rounded-xl border border-black/10 bg-white/80 px-3 py-2 text-sm text-ink outline-none focus:border-amberSoft"
+            />
+          </label>
+
+          <label className="block">
+            <span className="text-xs font-semibold uppercase tracking-wide text-soft">
+              Diet Tags (comma separated)
+            </span>
+            <input
+              value={dietTagsText}
+              onChange={(event) => setDietTagsText(event.target.value)}
+              placeholder="vegan, gluten-free, halal"
+              className="mt-1 w-full rounded-xl border border-black/10 bg-white/80 px-3 py-2 text-sm text-ink outline-none focus:border-amberSoft"
+            />
+          </label>
+
+          <label className="block">
+            <span className="text-xs font-semibold uppercase tracking-wide text-soft">
+              Favorite Categories (comma separated)
+            </span>
+            <input
+              value={favoriteCategoriesText}
+              onChange={(event) => setFavoriteCategoriesText(event.target.value)}
+              placeholder="coffee, sushi, brunch"
+              className="mt-1 w-full rounded-xl border border-black/10 bg-white/80 px-3 py-2 text-sm text-ink outline-none focus:border-amberSoft"
+            />
+          </label>
+
+          <label className="block">
+            <span className="text-xs font-semibold uppercase tracking-wide text-soft">
+              Event Tags (comma separated)
+            </span>
+            <input
+              value={eventTagsText}
+              onChange={(event) => setEventTagsText(event.target.value)}
+              placeholder="music, outdoors, networking"
+              className="mt-1 w-full rounded-xl border border-black/10 bg-white/80 px-3 py-2 text-sm text-ink outline-none focus:border-amberSoft"
+            />
+          </label>
+        </div>
+
+        <div className="mt-3 flex items-center gap-2">
+          <button
+            onClick={handleSavePreferences}
+            disabled={prefsSaving || primaryState.isLoading}
+            className={`chip text-xs ${prefsSaving ? "chip-idle" : "chip-active"}`}
+          >
+            {prefsSaving ? "Saving..." : "Save Profile Preferences"}
+          </button>
+          {prefsStatus ? <p className="text-xs font-semibold text-green-700">{prefsStatus}</p> : null}
+          {prefsError ? <p className="text-xs font-semibold text-red-600">{prefsError}</p> : null}
+        </div>
       </section>
 
       <section className="glass-card mt-4 p-4">

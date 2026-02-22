@@ -2,6 +2,7 @@ import type {
   AvailabilityWindow,
   CalendarAccount,
   GoogleCalendarEvent,
+  MockReservation,
   OauthState,
   Preferences,
   User,
@@ -19,6 +20,8 @@ class MemoryStore {
   availabilityWindows = new Map<string, AvailabilityWindow[]>();
 
   googleCalendarEvents = new Map<string, GoogleCalendarEvent[]>();
+
+  mockReservations = new Map<string, MockReservation[]>();
 
   oauthStates = new Map<string, OauthState>();
 }

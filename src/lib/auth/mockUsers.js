@@ -1,6 +1,6 @@
 export const MOCK_USERS = [
   {
-    id: "faith",
+    user_id: "6f0f8e72-8717-4b8d-a2ea-e2dca4e5f111",
     username: "faith",
     password: "faith123",
     name: "Faith Johnson",
@@ -8,7 +8,7 @@ export const MOCK_USERS = [
     timezone: "America/Los_Angeles",
   },
   {
-    id: "maria",
+    user_id: "61fbbf57-b7c6-4ddd-aa9f-caf3afba2222",
     username: "maria",
     password: "maria123",
     name: "Maria Lopez",
@@ -16,7 +16,7 @@ export const MOCK_USERS = [
     timezone: "America/Los_Angeles",
   },
   {
-    id: "devin",
+    user_id: "3f1b578d-51e6-4f84-b0f5-9cf6d4dc3333",
     username: "devin",
     password: "devin123",
     name: "Devin Patel",

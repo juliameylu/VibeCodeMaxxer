@@ -53,6 +53,22 @@ Base URL:
 - `GET /api/availability/:user_id?start_ts=<UTC_ISO>&end_ts=<UTC_ISO>`
   - returns availability windows in requested range
 
+### Mock Restaurant Reservations
+- `GET /api/mock-reservations/availability`
+  - query: `restaurant_id`, optional `restaurant_name`, optional `date`
+- `POST /api/mock-reservations/book`
+  - body:
+    - `user_id`
+    - `restaurant_id`
+    - `restaurant_name`
+    - `slot_id`
+    - `start_ts`
+    - `end_ts`
+    - `party_size`
+    - `special_requests` (string[])
+    - `notes` (string)
+- `GET /api/mock-reservations/:user_id`
+
 ## 3) Frontend Profile Flow
 
 On `/profile`:
