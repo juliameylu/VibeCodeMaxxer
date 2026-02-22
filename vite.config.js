@@ -140,7 +140,7 @@ async function handleEvents(req, res) {
   const searchQuery = (query.get("query") || "").toLowerCase();
 
   const source = process.env.CALPOLY_EVENTS_SOURCE || "https://r.jina.ai/http://now.calpoly.edu/";
-  const upstreamRes = await fetch(source);
+  const upstreamRes = await fetch(source, { cache: "no-store" });
   const text = await upstreamRes.text();
 
   if (!upstreamRes.ok) {
@@ -168,6 +168,7 @@ async function handleEvents(req, res) {
     return timeOk && categoryOk && queryOk;
   });
 
+  res.setHeader("Cache-Control", "no-store");
   return sendJson(res, 200, { items, total: items.length });
 }
 

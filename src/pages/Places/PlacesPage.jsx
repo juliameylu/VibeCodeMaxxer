@@ -9,11 +9,11 @@ import EmptyState from "../../components/ui/EmptyState";
 import Skeleton from "../../components/ui/Skeleton";
 import { usePlacesSearch } from "../../lib/hooks/usePlacesSearch";
 import {
-  clearRecommendationProfile,
-  rankItems,
-  trackImpressionsOncePerSession,
-  trackRecommendationAction,
-} from "../../lib/recommendation/hybrid";
+  clearRestaurantProfile,
+  rankRestaurants,
+  trackRestaurantAction,
+  trackRestaurantImpressionsOncePerSession,
+} from "../../lib/recommendation/restaurants";
 import PlaceCard from "./components/PlaceCard";
 
 const CATEGORY_OPTIONS = [
@@ -67,13 +67,11 @@ export default function PlacesPage() {
   const { data, isLoading, error } = usePlacesSearch(filters);
   const ranking = useMemo(
     () =>
-      rankItems({
-        namespace: "places-page",
+      rankRestaurants({
         items: data.items,
-        getId: (place) => place.id,
-        getText: (place) => `${place.name} ${place.category} ${place.address} ${place.price}`
+        activePreferences: [...preferences, customPreference].filter(Boolean),
       }),
-    [data.items]
+    [data.items, preferences, customPreference]
   );
 
   const rankedItems = useMemo(() => ranking.ranked.map((row) => row.item), [ranking.ranked]);
@@ -86,13 +84,12 @@ export default function PlacesPage() {
   const hasMore = visibleCount < filteredVisible.length || data.hasMore;
 
   useEffect(() => {
-    trackImpressionsOncePerSession({
-      namespace: "places-page",
-      items: filteredVisible,
-      getId: (place) => place.id,
-      getText: (place) => `${place.name} ${place.category} ${place.address} ${place.price}`,
-      limit: 8
-    });
+    trackRestaurantImpressionsOncePerSession(
+      filteredVisible,
+      (place) => place.id,
+      (place) => `${place.name} ${place.category} ${place.address} ${place.price}`,
+      8,
+    );
   }, [filteredVisible]);
 
   function togglePreference(value) {
@@ -117,8 +114,7 @@ export default function PlacesPage() {
     setLikedIds((prev) => {
       const nextLiked = !prev.includes(place.id);
       if (nextLiked) {
-        trackRecommendationAction({
-          namespace: "places-page",
+        trackRestaurantAction({
           itemId: place.id,
           text: `${place.name} ${place.category} ${place.address} ${place.price}`,
           action: "like"
@@ -129,8 +125,7 @@ export default function PlacesPage() {
   }
 
   function dismissPlace(place) {
-    trackRecommendationAction({
-      namespace: "places-page",
+    trackRestaurantAction({
       itemId: place.id,
       text: `${place.name} ${place.category} ${place.address} ${place.price}`,
       action: "dismiss"
@@ -139,8 +134,7 @@ export default function PlacesPage() {
   }
 
   function onOpenPlace(place) {
-    trackRecommendationAction({
-      namespace: "places-page",
+    trackRestaurantAction({
       itemId: place.id,
       text: `${place.name} ${place.category} ${place.address} ${place.price}`,
       action: "open"
@@ -173,7 +167,7 @@ export default function PlacesPage() {
             <button
               className="chip chip-idle text-xs"
               onClick={() => {
-                clearRecommendationProfile("places-page");
+                clearRestaurantProfile();
                 setLikedIds([]);
                 setHiddenIds([]);
                 setShowAll(false);
