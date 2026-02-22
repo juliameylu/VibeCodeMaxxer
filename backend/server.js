@@ -1,6 +1,8 @@
+import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import * as cheerio from "cheerio";
+import { registerPlannerApi } from "./plannerApi.js";
 
 const app = express();
 const PORT = Number(process.env.BACKEND_PORT || 8787);
@@ -10,6 +12,7 @@ const CACHE_TTL_MS = Number(process.env.SHOWS_CACHE_TTL_MS || 1000 * 60 * 30);
 const IMAGE_CACHE_TTL_MS = Number(process.env.IMAGE_CACHE_TTL_MS || 1000 * 60 * 60 * 24);
 
 app.use(cors({ origin: process.env.CORS_ORIGIN || "http://localhost:5173" }));
+app.use(express.json());
 
 let cache = null;
 let refreshInFlight = null;
@@ -480,7 +483,50 @@ async function refreshCache(reason = "manual") {
 }
 
 app.get("/health", (_, res) => {
-  res.json({ ok: true, service: "fremont-shows-backend" });
+  res.json({
+    ok: true,
+    service: "fremont-shows-backend",
+    auth_mode: process.env.AUTH_MODE || "session_or_cognito",
+    aws_state: process.env.AWS_DYNAMO_TABLE ? "dynamodb" : "memory"
+  });
+});
+
+app.get("/api/figma/test", async (_, res) => {
+  const apiKey = process.env.FIGMA_API_KEY;
+  const fileKey = process.env.FIGMA_FILE_KEY;
+
+  if (!apiKey || !fileKey) {
+    res.status(500).json({ error: "Missing FIGMA_API_KEY or FIGMA_FILE_KEY in backend environment." });
+    return;
+  }
+
+  try {
+    const response = await fetch(`https://api.figma.com/v1/files/${fileKey}`, {
+      headers: { "X-Figma-Token": apiKey }
+    });
+    const data = await response.json();
+
+    if (!response.ok) {
+      res.status(response.status).json({
+        error: "Figma API request failed",
+        details: data
+      });
+      return;
+    }
+
+    res.json({
+      ok: true,
+      name: data?.name || "",
+      lastModified: data?.lastModified || "",
+      version: data?.version || "",
+      role: data?.role || ""
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: "Figma request error",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
 });
 
 app.get("/api/fremont-shows", async (req, res) => {
@@ -519,6 +565,8 @@ app.get("/api/fremont-shows", async (req, res) => {
     });
   }
 });
+
+registerPlannerApi(app);
 
 app.listen(PORT, () => {
   console.log(`Fremont scraper backend running on http://localhost:${PORT}`);

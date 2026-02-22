@@ -1,34 +1,31 @@
-import { Calendar, MapPin, Settings, Circle } from "lucide-react";
-import MobileShell from "../../components/MobileShell";
+import { Link } from "react-router-dom";
+import AppShell from "../../lib/pageshell/AppShell";
+import { useAuth } from "../../lib/auth/AuthContext";
 
 export default function ProfilePage() {
+  const auth = useAuth();
+
   return (
-    <MobileShell showFab={false}>
-      <section className="glass-card p-5">
-        <p className="text-sm font-semibold text-ink/60">Profile</p>
-        <h1 className="mt-1 flex items-center gap-2 text-2xl font-bold text-ink">
-          <Circle size={24} className="text-amberSoft" />
-          Faith Johnson
-        </h1>
-        <p className="mt-1 text-sm text-soft">Computer Science, Year 2</p>
+    <AppShell title="Profile" subtitle="Preferences, account, and settings">
+      <section className="glass-card p-4">
+        <p className="text-xs uppercase tracking-wide text-ink/60">Account</p>
+        <p className="mt-1 font-semibold text-ink">{auth.user?.display_name || "Student"}</p>
+        <p className="text-sm text-soft">{auth.user?.email}</p>
       </section>
 
-      <section className="glass-card mt-5 p-4">
-        <div className="space-y-3">
-          <button className="row-pill flex w-full items-center gap-3 text-left text-ink">
-            <Calendar size={18} className="text-amberSoft" />
-            <span className="font-semibold">Academic Preferences</span>
-          </button>
-          <button className="row-pill flex w-full items-center gap-3 text-left text-ink">
-            <MapPin size={18} className="text-amberSoft" />
-            <span className="font-semibold">Reminder Settings</span>
-          </button>
-          <button className="row-pill flex w-full items-center gap-3 text-left text-ink">
-            <Settings size={18} className="text-amberSoft" />
-            <span className="font-semibold">App Settings</span>
-          </button>
-        </div>
+      <section className="glass-card p-4">
+        <p className="text-xs uppercase tracking-wide text-ink/60">Preferences</p>
+        <p className="mt-1 text-sm text-soft">Vibe: {auth.preferences?.vibe || "-"}</p>
+        <p className="text-sm text-soft">Budget: {auth.preferences?.budget || "-"}</p>
+        <p className="text-sm text-soft">Categories: {(auth.preferences?.categories || []).join(", ") || "-"}</p>
       </section>
-    </MobileShell>
+
+      <div className="grid grid-cols-2 gap-2">
+        <Link to="/settings" className="chip chip-idle py-3 text-center text-sm">Settings</Link>
+        <Link to="/onboarding/preferences" className="chip chip-idle py-3 text-center text-sm">Edit Preferences</Link>
+      </div>
+
+      <button onClick={auth.signOut} className="chip chip-active w-full py-3 text-sm">Sign out</button>
+    </AppShell>
   );
 }
