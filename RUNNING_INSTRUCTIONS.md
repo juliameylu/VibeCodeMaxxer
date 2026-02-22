@@ -52,6 +52,46 @@ npm run build
 npm run preview
 ```
 
+## Backend (User + Preferences + Calendar Mock)
+
+The backend lives in `server/` and exposes:
+- `POST /api/users`
+- `GET /api/users/:user_id`
+- `GET/PUT /api/preferences/:user_id`
+- `POST /api/calendar/connect`
+- `POST /api/calendar/callback`
+- `POST /api/calendar/sync`
+- `GET /api/calendar/status/:user_id`
+- `GET /api/calendar/events/:user_id` (mock Google Calendar event shape)
+- `GET /api/availability/:user_id`
+- `GET /api/mock-reservations/availability`
+- `POST /api/mock-reservations/book`
+- `GET /api/mock-reservations/:user_id`
+
+Run it locally:
+
+```bash
+cd server
+npm install
+npm run dev
+```
+
+Default backend URL: `http://localhost:3001`
+Set `VITE_BACKEND_BASE_URL=http://localhost:3001` in frontend `.env` if needed.
+
+### Places Page Notes + Yelp Link Behavior
+
+- Reservation panel supports user notes for:
+  - allergies
+  - high chair / kids context
+  - other seating preferences
+- These are sent in mock booking payload fields:
+  - `special_requests: string[]`
+  - `notes: string`
+- You do not need `VITE_DEMO_MODE=false` just to open restaurant-level Yelp links.
+  - In demo mode, fixture data includes direct restaurant Yelp URLs.
+  - In live mode (`VITE_DEMO_MODE=false`), links come from real API response data.
+
 ## Project Structure
 
 ```

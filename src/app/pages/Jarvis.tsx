@@ -8,10 +8,12 @@ import { PageHeader } from "../components/PageHeader";
 import { toast } from "sonner";
 import { getUserPreferences, getPersonalizedRecommendation, getPreferenceScore } from "../utils/preferences";
 import { places, getDistanceMiles, CAL_POLY_LAT, CAL_POLY_LNG, getPlaceEmoji, type Place } from "../data/places";
-import { withApiBase } from "../../lib/api/baseUrl";
+import { apiFetch } from "../../lib/apiClient";
 
 const MESSAGES_KEY = "polyjarvis_chat_history";
 const HOME_LOCATION_KEY = "polyjarvis_home_location";
+const RESERVATION_STATUS_KEY = "polyjarvis_reservation_statuses";
+const USER_ID_KEY = "slo_user_id";
 
 const promptPills = [
   "Best tacos near campus?",
@@ -294,18 +296,39 @@ function pickFindVariation(seed: string) {
 type NavAction = { type: "navigate"; path: string; label: string } | null;
 
 interface JarvisAction {
-  type: "pin" | "jam" | "plan";
+  type: "pin" | "jam" | "plan" | "confirm_action";
   label: string;
+  actionId?: string;
+  actionType?: string;
+  payload?: any;
   data?: any;
 }
 
 interface ChatMessage {
   role: "user" | "assistant";
   text: string;
+  imageUrl?: string;
   action?: NavAction;
   jarvisActions?: JarvisAction[];
   timestamp?: number;
 }
+
+type ReservationDraft = {
+  restaurantName: string;
+  reservationTime: string;
+  partySize: number;
+  specialRequest?: string;
+};
+
+type ReservationStatusRecord = {
+  jobId: string;
+  restaurantName: string;
+  reservationTime: string;
+  partySize: number;
+  status: string;
+  decision: string;
+  updatedAt: number;
+};
 
 type RecommendationMemory = {
   kind: "find" | "food";
@@ -321,6 +344,121 @@ function isYesReply(input: string) {
 
 function isNoReply(input: string) {
   return /^(no|n|nope|nah|not now|skip)$/i.test(input.trim());
+}
+
+function isReservationIntent(input: string) {
+  const q = normalizeInput(input);
+  return /(make|book|get|set up|create|call).*(reservation|table)/.test(q)
+    || /(reservation|table).*(at|for)/.test(q);
+}
+
+function isImageGenerationIntent(input: string) {
+  const q = normalizeInput(input);
+  return /(^|\s)(generate|make|create|draw|design)\b.*\b(image|picture|photo|art|poster|logo|wallpaper)\b/.test(q)
+    || /(^|\s)(image|picture|photo)\b.*\b(of|for)\b/.test(q)
+    || q.startsWith("/image ");
+}
+
+function extractImagePrompt(input: string) {
+  const trimmed = input.trim();
+  if (/^\/image\s+/i.test(trimmed)) {
+    return trimmed.replace(/^\/image\s+/i, "").trim();
+  }
+  const ofMatch = trimmed.match(/\b(?:image|picture|photo|art|poster|logo|wallpaper)\s+(?:of|for)\s+(.+)$/i);
+  if (ofMatch?.[1]) return ofMatch[1].trim();
+
+  return trimmed
+    .replace(/\b(generate|make|create|draw|design)\b/gi, "")
+    .replace(/\b(an?|the)\b/gi, "")
+    .replace(/\b(image|picture|photo|art|poster|logo|wallpaper)\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function detectRestaurantName(input: string): string {
+  const q = normalizeInput(input);
+  const foodPlaces = places.filter((p) => FOOD_CATEGORIES.has(p.category));
+  const match = foodPlaces
+    .map((p) => p.name)
+    .sort((a, b) => b.length - a.length)
+    .find((name) => q.includes(normalizeInput(name)));
+  if (match) return match;
+
+  const atMatch = input.match(/\bat\s+([a-z0-9 '&.-]{2,})/i);
+  if (atMatch?.[1]) {
+    const cleaned = atMatch[1]
+      .replace(/\b(tonight|today|tomorrow)\b.*$/i, "")
+      .replace(/\bfor\s+\d+.*$/i, "")
+      .replace(/\bat\s+\d.*$/i, "")
+      .trim();
+    if (cleaned.length > 1) return cleaned;
+  }
+
+  const generic = input
+    .replace(/^(can you|could you|please)\s+/i, "")
+    .replace(/^(make|book|get|set up|create|call)\s+(me\s+)?(a\s+)?/i, "")
+    .replace(/\b(reservation|table)\b/gi, "")
+    .replace(/\b(at|for)\b.*/i, "")
+    .trim();
+
+  return generic.length > 1 ? generic : "";
+}
+
+function parsePartySize(input: string): number | null {
+  const forMatch = input.match(/\bfor\s+(\d{1,2})\b/i);
+  if (forMatch?.[1]) return Number(forMatch[1]);
+  const partyMatch = input.match(/\bparty\s+of\s+(\d{1,2})\b/i);
+  if (partyMatch?.[1]) return Number(partyMatch[1]);
+  return null;
+}
+
+function parseReservationTime(input: string): string | null {
+  const lower = normalizeInput(input);
+  const timeMatch = input.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i);
+  const hasTonight = /\btonight\b/.test(lower);
+  const hasTomorrow = /\btomorrow\b/.test(lower);
+  const hasToday = /\btoday\b/.test(lower);
+
+  if (timeMatch) {
+    const raw = timeMatch[0].toUpperCase();
+    if (hasTomorrow) return `Tomorrow ${raw}`;
+    if (hasTonight) return `Tonight ${raw}`;
+    if (hasToday) return `Today ${raw}`;
+    return `Tonight ${raw}`;
+  }
+
+  if (hasTomorrow) return "Tomorrow evening";
+  if (hasTonight) return "Tonight 7:00 PM";
+  if (hasToday) return "Today evening";
+  return null;
+}
+
+function parseSpecialRequest(input: string): string | undefined {
+  const lower = normalizeInput(input);
+  if (/outside|outdoor|patio/.test(lower)) return "Outdoor seating if possible";
+  if (/inside|indoor/.test(lower)) return "Indoor seating preferred";
+  if (/quiet/.test(lower)) return "Quiet table if available";
+  if (/window/.test(lower)) return "Window seat if available";
+  return undefined;
+}
+
+function buildReservationDraft(input: string): ReservationDraft | null {
+  const restaurantName = detectRestaurantName(input);
+  if (!restaurantName) return null;
+  return {
+    restaurantName,
+    reservationTime: parseReservationTime(input) || "Tonight 7:00 PM",
+    partySize: parsePartySize(input) || 2,
+    specialRequest: parseSpecialRequest(input),
+  };
+}
+
+function applyReservationEdits(draft: ReservationDraft, input: string): ReservationDraft {
+  const restaurantName = detectRestaurantName(input) || draft.restaurantName;
+  const reservationTime = parseReservationTime(input) || draft.reservationTime;
+  const partySize = parsePartySize(input) || draft.partySize;
+  const specialRequest = parseSpecialRequest(input) || draft.specialRequest;
+  return { restaurantName, reservationTime, partySize, specialRequest };
 }
 
 type ClarificationState = {
@@ -1079,10 +1217,81 @@ function findResponse(input: string): { text: string; action?: NavAction; jarvis
   return { text: "I don't have that one yet. Try asking about food, hikes, coffee, beaches — or say \"help\" for the full list." };
 }
 
+function getTimeOfDayLabel() {
+  const hour = new Date().getHours();
+  if (hour < 12) return "morning";
+  if (hour < 17) return "afternoon";
+  if (hour < 21) return "evening";
+  return "night";
+}
+
+function buildAgentContextPayload() {
+  let pinnedCount = 0;
+  let myEventsCount = 0;
+  try {
+    const pinnedRaw = localStorage.getItem("pinnedEvents");
+    if (pinnedRaw) pinnedCount = JSON.parse(pinnedRaw).length || 0;
+  } catch {
+    pinnedCount = 0;
+  }
+  try {
+    const eventsRaw = localStorage.getItem("polyjarvis_my_events");
+    if (eventsRaw) myEventsCount = JSON.parse(eventsRaw).length || 0;
+  } catch {
+    myEventsCount = 0;
+  }
+
+  return {
+    weather: "clear",
+    timeOfDay: getTimeOfDayLabel(),
+    activeScreen: "/jarvis",
+    localSignals: {
+      pinnedCount,
+      myEventsCount
+    }
+  };
+}
+
+function formatAgentCards(cards: any[]) {
+  if (!Array.isArray(cards) || cards.length === 0) return "";
+  const lines = cards.slice(0, 3).map((card: any, index: number) => {
+    const title = String(card?.title || "Option");
+    const subtitle = String(card?.subtitle || "").trim();
+    const tags = Array.isArray(card?.reason_tags) ? card.reason_tags.slice(0, 2).join(", ") : "";
+    return `${index + 1}. ${title}${subtitle ? ` — ${subtitle}` : ""}${tags ? ` (${tags})` : ""}`;
+  });
+  return `\n\nTop picks:\n${lines.join("\n")}`;
+}
+
+function mapProposedActionsToJarvisActions(proposedActions: any[]): JarvisAction[] {
+  if (!Array.isArray(proposedActions)) return [];
+  return proposedActions.slice(0, 4).map((action: any) => {
+    const type = String(action?.type || "");
+    const fallback = "Confirm action";
+    const labelByType: Record<string, string> = {
+      create_plan_draft: "Create plan draft",
+      rsvp_event: "RSVP now",
+      join_jam: "Join jam",
+      add_study_task: "Add task",
+      create_booking_intent: "Create booking intent",
+    };
+    return {
+      type: "confirm_action",
+      label: labelByType[type] || fallback,
+      actionId: String(action?.action_id || ""),
+      actionType: type,
+      payload: action?.payload || null,
+    };
+  }).filter((item) => Boolean(item.actionId));
+}
+
 // ─── Chat persistence helpers ───────────────────────────────────────────────
 function loadMessages(): ChatMessage[] {
+  const userId = localStorage.getItem(USER_ID_KEY);
+  if (!userId) return [];
+  const scopedKey = `${MESSAGES_KEY}:${userId}`;
   try {
-    const raw = localStorage.getItem(MESSAGES_KEY);
+    const raw = localStorage.getItem(scopedKey);
     if (raw) {
       const parsed = JSON.parse(raw) as ChatMessage[];
       if (Array.isArray(parsed) && parsed.length > 0) return parsed;
@@ -1092,80 +1301,78 @@ function loadMessages(): ChatMessage[] {
 }
 
 function saveMessages(msgs: ChatMessage[]) {
+  const userId = localStorage.getItem(USER_ID_KEY);
+  if (!userId) return;
+  const scopedKey = `${MESSAGES_KEY}:${userId}`;
   try {
     // Keep last 100 messages to avoid localStorage bloat
     const trimmed = msgs.slice(-100);
-    localStorage.setItem(MESSAGES_KEY, JSON.stringify(trimmed));
+    localStorage.setItem(scopedKey, JSON.stringify(trimmed));
   } catch { /* noop */ }
 }
 
-type ReservationCallForm = {
-  restaurant_name: string;
-  reservation_time: string;
-  party_size: number;
-  special_request: string;
-};
+function loadReservationStatuses(): ReservationStatusRecord[] {
+  try {
+    const raw = localStorage.getItem(RESERVATION_STATUS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
 
-type ReservationCallJob = {
-  job_id: string;
-  status: string;
-  restaurant_name: string;
-  reservation_time: string;
-  party_size: number;
-  decision_digit?: string;
-  reservation_decision?: string;
-  attempts?: Array<unknown>;
-  sms_notifications?: {
-    state?: string;
-    sent?: number;
-    failed?: number;
-    recipients?: number;
-    errors?: string[];
+function upsertReservationStatus(next: ReservationStatusRecord) {
+  const current = loadReservationStatuses();
+  const filtered = current.filter((item) => item.jobId !== next.jobId);
+  filtered.unshift(next);
+  localStorage.setItem(RESERVATION_STATUS_KEY, JSON.stringify(filtered.slice(0, 25)));
+}
+
+async function recoverBackendSessionToken(forceRenew = false): Promise<string | null> {
+  if (forceRenew) {
+    localStorage.removeItem("slo_session_token");
+  } else {
+    const existing = localStorage.getItem("slo_session_token");
+    if (existing) return existing;
+  }
+
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const credentials = {
+    email: `guest-${suffix}@guest.local`,
+    password: `guest-${Math.random().toString(36).slice(2, 12)}`,
+    displayName: "Guest",
+    phone: "+15555550100",
   };
-};
 
-function getSessionToken() {
-  return localStorage.getItem("slo_session_token") || "";
-}
-
-async function ensureSessionToken() {
-  const existing = getSessionToken();
-  if (existing) return existing;
-  const response = await fetch(withApiBase("/api/auth/demo-session"), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      email: "jarvis-demo@polyjarvis.local",
-      display_name: "Jarvis Demo User",
-    }),
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok || !data?.sessionToken) {
-    throw new Error(data?.error || "Unable to create demo session");
+  try {
+    const data = await apiFetch("/api/auth/signup", {
+      method: "POST",
+      withAuth: false,
+      body: credentials,
+    });
+    if (data?.sessionToken) {
+      localStorage.setItem("slo_session_token", data.sessionToken);
+      return data.sessionToken;
+    }
+  } catch {
+    // fallback below
   }
-  localStorage.setItem("slo_session_token", data.sessionToken);
-  return data.sessionToken as string;
-}
 
-async function apiJson<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const sessionToken = await ensureSessionToken();
-  const headers = new Headers(init.headers || {});
-  if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
-  if (sessionToken) headers.set("x-session-token", sessionToken);
-  const response = await fetch(withApiBase(path), { ...init, headers });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error((data as { error?: string })?.error || "Request failed");
+  try {
+    const data = await apiFetch("/api/auth/signin", {
+      method: "POST",
+      withAuth: false,
+      body: { email: credentials.email, password: credentials.password },
+    });
+    if (data?.sessionToken) {
+      localStorage.setItem("slo_session_token", data.sessionToken);
+      return data.sessionToken;
+    }
+  } catch {
+    // ignore
   }
-  return data as T;
-}
 
-function renderReservationDecision(decision?: string) {
-  if (decision === "declined-timeout") return "Declined (timed out)";
-  if (decision === "declined") return "Declined";
-  if (decision === "confirmed") return "Confirmed";
-  if (decision === "no-response") return "No valid response";
-  return "Pending";
+  return null;
 }
 
 export function Jarvis() {
@@ -1191,18 +1398,12 @@ export function Jarvis() {
   const [awaitingRebalanceReply, setAwaitingRebalanceReply] = useState(false);
   const [clarification, setClarification] = useState<ClarificationState | null>(null);
   const [recommendationMemory, setRecommendationMemory] = useState<RecommendationMemory | null>(null);
-  const [callForm, setCallForm] = useState<ReservationCallForm>({
-    restaurant_name: "Demo Restaurant",
-    reservation_time: "Tonight at 7:00 PM",
-    party_size: 2,
-    special_request: "",
-  });
-  const [calling, setCalling] = useState(false);
-  const [callError, setCallError] = useState("");
-  const [callStatus, setCallStatus] = useState("");
-  const [callJob, setCallJob] = useState<ReservationCallJob | null>(null);
+  const [pendingReservation, setPendingReservation] = useState<ReservationDraft | null>(null);
   const [keyboardOpen, setKeyboardOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const reservationPollRef = useRef<number | null>(null);
+  const reservationPollJobRef = useRef<string>("");
+  const reservationFinalNotifiedRef = useRef<Record<string, boolean>>({});
 
   // Persist messages whenever they change
   useEffect(() => {
@@ -1210,7 +1411,6 @@ export function Jarvis() {
   }, [messages]);
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, isTyping]);
-
   useEffect(() => {
     const isEditable = (el: EventTarget | null) => {
       if (!(el instanceof HTMLElement)) return false;
@@ -1242,6 +1442,7 @@ export function Jarvis() {
     window.visualViewport?.addEventListener("resize", syncKeyboard);
     window.visualViewport?.addEventListener("scroll", syncKeyboard);
     syncKeyboard();
+
     return () => {
       document.removeEventListener("focusin", onFocusIn);
       document.removeEventListener("focusout", onFocusOut);
@@ -1249,55 +1450,94 @@ export function Jarvis() {
       window.visualViewport?.removeEventListener("scroll", syncKeyboard);
     };
   }, []);
-
   useEffect(() => {
-    if (!callJob?.job_id) return undefined;
-    const terminal = new Set(["failed", "reservation-confirmed", "reservation-declined", "reservation-timeout", "awaiting-followup"]);
-    const completedWithDecision = callJob.status === "completed" && callJob.reservation_decision !== "pending";
-    if (terminal.has(callJob.status) || completedWithDecision) return undefined;
-
-    const timer = setInterval(async () => {
-      try {
-        const data = await apiJson<{ call_job?: ReservationCallJob }>(`/api/agent/call/${callJob.job_id}`);
-        setCallJob(data.call_job || null);
-      } catch {
-        // Ignore transient polling errors.
+    const syncHistoryFromAuth = () => {
+      const saved = loadMessages();
+      if (saved.length > 0) {
+        setMessages(saved);
+        return;
       }
-    }, 2500);
-
-    return () => clearInterval(timer);
-  }, [callJob?.job_id, callJob?.status, callJob?.reservation_decision]);
+      setMessages([{ role: "assistant", text: initialGreeting, timestamp: Date.now() }]);
+    };
+    window.addEventListener("slo-auth-changed", syncHistoryFromAuth);
+    return () => window.removeEventListener("slo-auth-changed", syncHistoryFromAuth);
+  }, [initialGreeting]);
+  useEffect(() => {
+    return () => {
+      if (reservationPollRef.current) {
+        window.clearInterval(reservationPollRef.current);
+        reservationPollRef.current = null;
+      }
+    };
+  }, []);
 
   const handleNavigate = useCallback((path: string) => {
     setTimeout(() => navigate(path), 100);
   }, [navigate]);
 
-  const startReservationCall = useCallback(async () => {
-    if (calling) return;
-    setCalling(true);
-    setCallError("");
-    setCallStatus("");
-    try {
-      const payload = {
-        ...callForm,
-        party_size: Number(callForm.party_size || 2),
-        group_id: "creator-only",
-      };
-      const data = await apiJson<{ call_job?: ReservationCallJob }>("/api/agent/call/start", {
-        method: "POST",
-        body: JSON.stringify(payload),
-      });
-      setCallJob(data.call_job || null);
-      setCallStatus("Reservation call started.");
-      toast.success("Reservation call started");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to start reservation call.";
-      setCallError(message);
-      toast.error(message);
-    } finally {
-      setCalling(false);
+  const startReservationPolling = useCallback((jobId: string, restaurantName: string) => {
+    if (reservationPollRef.current) {
+      window.clearInterval(reservationPollRef.current);
+      reservationPollRef.current = null;
     }
-  }, [callForm, calling]);
+    reservationPollJobRef.current = jobId;
+
+    const run = () => {
+      apiFetch(`/api/agent/call/${jobId}`)
+        .then((data) => {
+          const job = data?.call_job;
+          if (!job) return;
+
+          const status = String(job.status || "").toLowerCase();
+          const decision = String(job.reservation_decision || "").toLowerCase();
+          upsertReservationStatus({
+            jobId,
+            restaurantName: job.restaurant_name || restaurantName,
+            reservationTime: job.reservation_time || "",
+            partySize: Number(job.party_size || 0),
+            status,
+            decision,
+            updatedAt: Date.now(),
+          });
+
+          const isFinal =
+            decision === "confirmed" ||
+            decision === "declined" ||
+            decision === "declined-timeout" ||
+            status === "reservation-confirmed" ||
+            status === "reservation-declined" ||
+            status === "reservation-timeout" ||
+            status === "failed";
+
+          if (!isFinal || reservationFinalNotifiedRef.current[jobId]) return;
+
+          reservationFinalNotifiedRef.current[jobId] = true;
+          let text = `Reservation update for ${job.restaurant_name || restaurantName}: still in progress.`;
+          if (decision === "confirmed" || status === "reservation-confirmed") {
+            text = `Reservation confirmed at ${job.restaurant_name || restaurantName} for ${job.party_size || "?"} at ${job.reservation_time || "requested time"}.`;
+          } else if (decision === "declined" || status === "reservation-declined") {
+            text = `Reservation declined by ${job.restaurant_name || restaurantName}. Want me to try a different time?`;
+          } else if (decision === "declined-timeout" || status === "reservation-timeout") {
+            text = `No confirmation input received from ${job.restaurant_name || restaurantName}. Want me to retry with another time?`;
+          } else if (status === "failed") {
+            text = `The call to ${job.restaurant_name || restaurantName} failed. ${job.last_error ? `Reason: ${job.last_error}` : ""}`.trim();
+          }
+
+          setMessages((prev) => [...prev, { role: "assistant", text, timestamp: Date.now() }]);
+
+          if (reservationPollRef.current && reservationPollJobRef.current === jobId) {
+            window.clearInterval(reservationPollRef.current);
+            reservationPollRef.current = null;
+          }
+        })
+        .catch(() => {
+          // Keep polling; transient errors are common while backend updates call state.
+        });
+    };
+
+    run();
+    reservationPollRef.current = window.setInterval(run, 7000);
+  }, []);
 
   const sendMessage = useCallback((text: string) => {
     if (!text.trim()) return;
@@ -1306,6 +1546,160 @@ export function Jarvis() {
     setMessages(prev => [...prev, userMsg]);
     setInput("");
     setIsTyping(true);
+
+    if (pendingReservation) {
+      const yes = isYesReply(prompt);
+      const no = isNoReply(prompt);
+
+      if (yes) {
+        const startCall = async () => {
+          try {
+            return await apiFetch("/api/agent/call/start", {
+              method: "POST",
+              body: {
+                restaurant_name: pendingReservation.restaurantName,
+                reservation_time: pendingReservation.reservationTime,
+                party_size: pendingReservation.partySize,
+                special_request: pendingReservation.specialRequest || "",
+                group_id: "creator-only",
+              },
+            });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "";
+            if (!/session token/i.test(message)) throw error;
+            const recovered = await recoverBackendSessionToken(true);
+            if (!recovered) throw error;
+            return apiFetch("/api/agent/call/start", {
+              method: "POST",
+              body: {
+                restaurant_name: pendingReservation.restaurantName,
+                reservation_time: pendingReservation.reservationTime,
+                party_size: pendingReservation.partySize,
+                special_request: pendingReservation.specialRequest || "",
+                group_id: "creator-only",
+              },
+            });
+          }
+        };
+
+        startCall()
+          .then((data) => {
+            const job = data?.call_job;
+            setIsTyping(false);
+            setPendingReservation(null);
+            if (job?.job_id) {
+              upsertReservationStatus({
+                jobId: job.job_id,
+                restaurantName: pendingReservation.restaurantName,
+                reservationTime: pendingReservation.reservationTime,
+                partySize: pendingReservation.partySize,
+                status: String(job?.status || "queued"),
+                decision: String(job?.reservation_decision || "pending"),
+                updatedAt: Date.now(),
+              });
+              startReservationPolling(job.job_id, pendingReservation.restaurantName);
+            }
+            setMessages((prev) => [
+              ...prev,
+              {
+                role: "assistant",
+                text: `Calling ${pendingReservation.restaurantName} now.\n\nReservation: ${pendingReservation.partySize} people at ${pendingReservation.reservationTime}.\n\nCall job: ${job?.job_id || "created"} (${job?.status || "started"}).\n\nI'll update you here when it is confirmed or declined.`,
+                timestamp: Date.now(),
+              },
+            ]);
+          })
+          .catch((error) => {
+            setIsTyping(false);
+            const errText = error instanceof Error ? error.message : "Could not start reservation call.";
+            setMessages((prev) => [
+              ...prev,
+              {
+                role: "assistant",
+                text: `I couldn't place the call yet: ${errText}`,
+                timestamp: Date.now(),
+              },
+            ]);
+          });
+        return;
+      }
+
+      if (no) {
+        const msg = "No problem. I canceled that reservation call draft.";
+        const delay = Math.min(260 + msg.length, 650);
+        setTimeout(() => {
+          setIsTyping(false);
+          setPendingReservation(null);
+          setMessages((prev) => [...prev, { role: "assistant", text: msg, timestamp: Date.now() }]);
+        }, delay);
+        return;
+      }
+
+      const updatedDraft = applyReservationEdits(pendingReservation, prompt);
+      const confirmText = `Updated.\n\nI can call ${updatedDraft.restaurantName} for ${updatedDraft.partySize} at ${updatedDraft.reservationTime}${updatedDraft.specialRequest ? ` (${updatedDraft.specialRequest})` : ""}.\n\nReply YES to place the call, NO to cancel, or send edits (example: "for 4 at 8:30 PM").`;
+      const delay = Math.min(260 + confirmText.length, 760);
+      setTimeout(() => {
+        setIsTyping(false);
+        setPendingReservation(updatedDraft);
+        setMessages((prev) => [...prev, { role: "assistant", text: confirmText, timestamp: Date.now() }]);
+      }, delay);
+      return;
+    }
+
+    if (isImageGenerationIntent(prompt)) {
+      const imagePrompt = extractImagePrompt(prompt);
+      if (!imagePrompt) {
+        const text = "Tell me what image you want. Example: /image cinematic sunset over Morro Rock.";
+        setTimeout(() => {
+          setIsTyping(false);
+          setMessages((prev) => [...prev, { role: "assistant", text, timestamp: Date.now() }]);
+        }, 260);
+        return;
+      }
+
+      apiFetch("/api/agent/image-generate", {
+        method: "POST",
+        body: { prompt: imagePrompt, size: "1024x1024" },
+      })
+        .then((data) => {
+          setIsTyping(false);
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: "assistant",
+              text: `Generated image for: ${imagePrompt}`,
+              imageUrl: data?.image_url || "",
+              timestamp: Date.now(),
+            },
+          ]);
+        })
+        .catch((error) => {
+          setIsTyping(false);
+          const errText = error instanceof Error ? error.message : "Could not generate image.";
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: "assistant",
+              text: `Image generation failed: ${errText}`,
+              timestamp: Date.now(),
+            },
+          ]);
+        });
+      return;
+    }
+
+    if (isReservationIntent(prompt)) {
+      const draft = buildReservationDraft(prompt);
+      const reply = draft
+        ? `I can call ${draft.restaurantName} and request a reservation for ${draft.partySize} at ${draft.reservationTime}${draft.specialRequest ? ` (${draft.specialRequest})` : ""}.\n\nReply YES to place the call, NO to cancel, or edit details (example: "for 4 at 8:30 PM").`
+        : `I can do that. Tell me the place first.\n\nExample: "make me a reservation at Firestone for 2 at 7:30 PM".`;
+      const delay = Math.min(260 + reply.length, 760);
+      setTimeout(() => {
+        setIsTyping(false);
+        if (draft) setPendingReservation(draft);
+        setMessages((prev) => [...prev, { role: "assistant", text: reply, timestamp: Date.now() }]);
+      }, delay);
+      return;
+    }
 
     if (awaitingRebalanceReply) {
       const lower = prompt.toLowerCase();
@@ -1528,23 +1922,72 @@ export function Jarvis() {
       return;
     }
 
-    const response = findResponse(text);
-    const delay = Math.min(300 + response.text.length * 1.2, 800);
-    setTimeout(() => {
-      setIsTyping(false);
-      const botMsg: ChatMessage = {
-        role: "assistant",
-        text: response.text,
-        action: response.action,
-        jarvisActions: response.jarvisActions,
-        timestamp: Date.now(),
-      };
-      if (/re-balance this for lower stress or stricter deadline mode/i.test(botMsg.text)) {
-        setAwaitingRebalanceReply(true);
+    const runAgentFallback = async () => {
+      try {
+        let data;
+        try {
+          data = await apiFetch("/api/agent/chat", {
+            method: "POST",
+            body: {
+              message: prompt,
+              context: buildAgentContextPayload(),
+            },
+          });
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : "";
+          if (!/session token/i.test(msg)) throw error;
+          const recovered = await recoverBackendSessionToken(true);
+          if (!recovered) throw error;
+          data = await apiFetch("/api/agent/chat", {
+            method: "POST",
+            body: {
+              message: prompt,
+              context: buildAgentContextPayload(),
+            },
+          });
+        }
+        const assistantText = String(data?.assistant_text || "").trim();
+        const cards = Array.isArray(data?.cards) ? data.cards : [];
+        const jarvisActions = mapProposedActionsToJarvisActions(data?.proposed_actions || []);
+        const firstDeepLink = String(cards[0]?.deep_link || "");
+        const navAction: NavAction = firstDeepLink
+          ? { type: "navigate", path: firstDeepLink, label: "Open top pick" }
+          : null;
+
+        const textOut = `${assistantText || "I analyzed your app data and generated next steps."}${formatAgentCards(cards)}`;
+        setIsTyping(false);
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            text: textOut,
+            action: navAction,
+            jarvisActions,
+            timestamp: Date.now(),
+          },
+        ]);
+      } catch {
+        const response = findResponse(text);
+        const delay = Math.min(300 + response.text.length * 1.2, 800);
+        setTimeout(() => {
+          setIsTyping(false);
+          const botMsg: ChatMessage = {
+            role: "assistant",
+            text: response.text,
+            action: response.action,
+            jarvisActions: response.jarvisActions,
+            timestamp: Date.now(),
+          };
+          if (/re-balance this for lower stress or stricter deadline mode/i.test(botMsg.text)) {
+            setAwaitingRebalanceReply(true);
+          }
+          setMessages(prev => [...prev, botMsg]);
+        }, delay);
       }
-      setMessages(prev => [...prev, botMsg]);
-    }, delay);
-  }, [awaitingRebalanceReply]);
+    };
+
+    void runAgentFallback();
+  }, [awaitingRebalanceReply, pendingReservation]);
 
   const handleSend = () => {
     sendMessage(input);
@@ -1581,6 +2024,55 @@ export function Jarvis() {
         navigate("/explore");
         toast.success("Opening Explore — tap the pin icon to save.");
         break;
+      case "confirm_action": {
+        if (!action.actionId) {
+          toast.error("Missing action id.");
+          return;
+        }
+        setIsTyping(true);
+        apiFetch(`/api/agent/actions/${action.actionId}/confirm`, {
+          method: "POST",
+          body: {},
+        })
+          .then((data) => {
+            const result = data?.result || {};
+            const actionType = String(data?.action_type || action.actionType || "action");
+            let text = `Confirmed: ${actionType}.`;
+            let nav: NavAction = null;
+
+            if (result?.deep_link) {
+              nav = { type: "navigate", path: String(result.deep_link), label: "Open result" };
+            }
+            if (result?.plan_id) {
+              text = `Plan draft created. Plan ID: ${result.plan_id}.`;
+              nav = { type: "navigate", path: `/plans/${result.plan_id}`, label: "Open plan" };
+            } else if (result?.task_id) {
+              text = `Task added: ${result.title || "New task"}.`;
+              nav = { type: "navigate", path: "/deadlines", label: "Open assignments" };
+            } else if (result?.event_id) {
+              text = `Event updated: ${result.state} for ${result.event_id}.`;
+              nav = { type: "navigate", path: "/myevents", label: "Open My Events" };
+            } else if (result?.provider && result?.deep_link) {
+              text = `Booking intent created with ${result.provider}. Complete the final step in provider flow.`;
+              nav = { type: "navigate", path: "/plans", label: "Open Plans" };
+              window.open(String(result.deep_link), "_blank", "noopener,noreferrer");
+            }
+
+            setMessages((prev) => [
+              ...prev,
+              { role: "assistant", text, action: nav, timestamp: Date.now() },
+            ]);
+          })
+          .catch((error) => {
+            const message = error instanceof Error ? error.message : "Could not confirm action.";
+            setMessages((prev) => [
+              ...prev,
+              { role: "assistant", text: `Couldn't confirm that action: ${message}`, timestamp: Date.now() },
+            ]);
+          })
+          .finally(() => setIsTyping(false));
+        break;
+      }
     }
   };
 
@@ -1588,7 +2080,7 @@ export function Jarvis() {
   const hasHistory = messages.length > 1;
 
   return (
-    <div className="min-h-full flex flex-col bg-transparent">
+    <div className="min-h-[100dvh] flex flex-col bg-transparent pb-16">
       {/* Header */}
       <div className="bg-gradient-to-b from-white/5 to-transparent px-5 pt-2 pb-4 flex-shrink-0">
         <PageHeader />
@@ -1620,53 +2112,6 @@ export function Jarvis() {
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
-        <article className="rounded-[18px] border border-[#a6ff7b33] bg-[#0e320f] p-3">
-          <p className="text-[12px] font-bold text-[#ebffdd]">Restaurant Call (Demo)</p>
-          <p className="mt-1 text-[11px] text-[#b9dea6]">Press 1 confirms reservation. SMS notifications are paused for demo timing.</p>
-          <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <input
-              value={callForm.restaurant_name}
-              onChange={(event) => setCallForm((prev) => ({ ...prev, restaurant_name: event.target.value }))}
-              placeholder="Restaurant"
-              className="h-10 rounded-xl border border-[#87f95e40] bg-[#a8ff861f] px-3 text-[12px] text-[#e7ffd8] placeholder:text-[#9dbc8f] focus:outline-none"
-            />
-            <input
-              value={callForm.reservation_time}
-              onChange={(event) => setCallForm((prev) => ({ ...prev, reservation_time: event.target.value }))}
-              placeholder="Time"
-              className="h-10 rounded-xl border border-[#87f95e40] bg-[#a8ff861f] px-3 text-[12px] text-[#e7ffd8] placeholder:text-[#9dbc8f] focus:outline-none"
-            />
-            <input
-              value={callForm.party_size}
-              onChange={(event) => setCallForm((prev) => ({ ...prev, party_size: Number(event.target.value || 2) }))}
-              placeholder="Party size"
-              className="h-10 rounded-xl border border-[#87f95e40] bg-[#a8ff861f] px-3 text-[12px] text-[#e7ffd8] placeholder:text-[#9dbc8f] focus:outline-none"
-            />
-            <input
-              value={callForm.special_request}
-              onChange={(event) => setCallForm((prev) => ({ ...prev, special_request: event.target.value }))}
-              placeholder="Special request (optional)"
-              className="h-10 rounded-xl border border-[#87f95e40] bg-[#a8ff861f] px-3 text-[12px] text-[#e7ffd8] placeholder:text-[#9dbc8f] focus:outline-none"
-            />
-          </div>
-          <button
-            onClick={startReservationCall}
-            disabled={calling}
-            className="mt-2 rounded-full bg-[#8ff451] px-4 py-2 text-[11px] font-bold text-[#12310f] disabled:opacity-60"
-          >
-            {calling ? "Starting..." : "Start Reservation Call"}
-          </button>
-          {callStatus ? <p className="mt-2 text-[11px] font-semibold text-[#b3f98a]">{callStatus}</p> : null}
-          {callError ? <p className="mt-2 text-[11px] font-semibold text-[#ff9f9f]">{callError}</p> : null}
-          {callJob ? (
-            <div className="mt-2 rounded-xl border border-[#95ff6d3d] bg-[#d4ffc615] p-2 text-[11px] text-[#e4ffd0]">
-              <p className="font-semibold text-[#efffe8]">Call status: {callJob.status}</p>
-              <p className="mt-1">Decision: {renderReservationDecision(callJob.reservation_decision)}</p>
-              {callJob.decision_digit ? <p>Pressed key: {callJob.decision_digit}</p> : null}
-            </div>
-          ) : null}
-        </article>
-
         {messages.map((msg, idx) => (
           <div key={`${idx}-${msg.timestamp || idx}`}>
             <div className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
@@ -1676,6 +2121,14 @@ export function Jarvis() {
                   : "bg-white/10 text-white/90 border border-white/10 rounded-bl-sm"
               }`}>
                 {msg.text}
+                {msg.imageUrl && (
+                  <img
+                    src={msg.imageUrl}
+                    alt="Generated by Jarvis"
+                    className="mt-2 rounded-xl border border-white/15 w-full max-w-[320px] object-cover"
+                    loading="lazy"
+                  />
+                )}
               </div>
             </div>
             {/* Navigation action */}

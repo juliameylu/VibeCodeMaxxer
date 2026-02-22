@@ -17,6 +17,7 @@ const DEFAULT_SLOCAL_OUTDOOR_URL = "https://www.slocal.com/things-to-do/outdoor-
 const DEFAULT_TRAILS_CSV_PATH = "/Users/kalanisterling/Downloads/Proposed_Trails.csv";
 const DEFAULT_WIKIPEDIA_CATEGORY_URL =
   "https://en.wikipedia.org/wiki/Category:Tourist_attractions_in_San_Luis_Obispo_County,_California";
+const CAL_POLY_NOW_URL = "https://now.calpoly.edu/events";
 
 const allowedOrigins = (process.env.CORS_ORIGIN || "http://localhost:5173,http://localhost:5174")
   .split(",")
@@ -746,6 +747,54 @@ app.post("/api/import/proposed-trails-csv", async (req, res) => {
       error: "Failed to parse proposed trails CSV",
       details: error instanceof Error ? error.message : "Unknown error",
       source: csvPath
+    });
+  }
+});
+
+app.get("/api/calpoly-now/events", async (req, res) => {
+  const interests = String(req.query.interests || "")
+    .split(",")
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+  try {
+    const response = await fetchWithHeaders(CAL_POLY_NOW_URL, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+    if (!response.ok) {
+      res.status(502).json({ error: "Failed to fetch Cal Poly NOW", status: response.status });
+      return;
+    }
+    const html = await response.text();
+    const $ = cheerio.load(html);
+    const events = [];
+    $("article, .event-item, .view-content .views-row").each((_, node) => {
+      const root = $(node);
+      const title = normalizeText(root.find("h2, h3, .field-content a").first().text());
+      const summary = normalizeText(root.find("p, .summary, .field-content").first().text());
+      const link = absoluteUrlFrom(CAL_POLY_NOW_URL, root.find("a[href]").first().attr("href") || "");
+      if (!title) return;
+      events.push({
+        id: `cpnow-${toId(title)}`,
+        title,
+        summary,
+        category: "campus",
+        link,
+        source: CAL_POLY_NOW_URL
+      });
+    });
+
+    const deduped = Array.from(new Map(events.map((event) => [event.id, event])).values());
+    const filtered = interests.length
+      ? deduped.filter((event) => {
+          const haystack = `${event.title} ${event.summary}`.toLowerCase();
+          return interests.some((interest) => haystack.includes(interest));
+        })
+      : deduped;
+
+    res.json({ ok: true, source: CAL_POLY_NOW_URL, count: filtered.length, events: filtered.slice(0, 30) });
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: "Failed to scrape Cal Poly NOW",
+      details: error instanceof Error ? error.message : "Unknown error"
     });
   }
 });

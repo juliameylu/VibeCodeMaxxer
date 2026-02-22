@@ -9,8 +9,12 @@ import { BottomNav } from "../components/BottomNav";
 import { PageHeader } from "../components/PageHeader";
 import { MustangIcon } from "../components/MustangIcon";
 import { getUserPreferences, getPreferenceScore, type UserPreferences } from "../utils/preferences";
+import { toast } from "sonner";
+import { apiFetch } from "../../lib/apiClient";
 
-const fallbackImage = "https://images.unsplash.com/photo-1551449440-f29f2e53104b?fm=jpg&fit=crop&w=800";
+const fallbackImage = "https://images.unsplash.com/photo-1551449440-f29f2e53104b?auto=format&fit=crop&w=800";
+const HEAD_CIRCLE_KEY = "polyjarvis_head_circle";
+const GUEST_CREDENTIALS_KEY = "slo_guest_credentials";
 
 // Events widget data (moved from Dashboard)
 const sloEvents = [
@@ -32,6 +36,10 @@ export function Explore() {
   const [eventFilter, setEventFilter] = useState("Today");
   const [priceFilter, setPriceFilter] = useState<string | null>(null);
   const [sortByPreference, setSortByPreference] = useState(true);
+  const [headCircleUrl, setHeadCircleUrl] = useState<string | null>(null);
+  const [seeYourselfMode, setSeeYourselfMode] = useState(false);
+  const [generatingPlaceId, setGeneratingPlaceId] = useState<string | null>(null);
+  const [personalizedImages, setPersonalizedImages] = useState<Record<string, string>>({});
   const userPrefs = useMemo(() => getUserPreferences(), []);
   const initRef = useRef(false);
 
@@ -55,6 +63,8 @@ export function Explore() {
 
     const pinned = localStorage.getItem("pinnedEvents");
     if (pinned) setPinnedIds(JSON.parse(pinned));
+    const headCircle = localStorage.getItem(HEAD_CIRCLE_KEY);
+    if (headCircle) setHeadCircleUrl(headCircle);
   }, []); // run once on mount
 
   const togglePin = (id: string, e: React.MouseEvent) => {
@@ -62,6 +72,133 @@ export function Explore() {
     const updated = pinnedIds.includes(id) ? pinnedIds.filter(l => l !== id) : [...pinnedIds, id];
     setPinnedIds(updated);
     localStorage.setItem("pinnedEvents", JSON.stringify(updated));
+  };
+
+  const scenarioForPlace = (place: (typeof places)[number]) => {
+    if (place.category === "Food & Treats") return `Generate me realistically at ${place.name} in ${place.city}, eating a signature food item at a table, natural candid style.`;
+    if (place.category === "Beaches") return `Generate me realistically at ${place.name} in ${place.city}, beach day vibe near the shoreline, natural sunlight.`;
+    if (place.category === "Hikes") return `Generate me realistically on a trail at ${place.name} in ${place.city}, outdoor hiking scene, realistic athletic outfit.`;
+    if (place.category === "Water Sports") return `Generate me realistically at ${place.name} in ${place.city} on ocean water activity, dynamic action photo style.`;
+    return `Generate me realistically at ${place.name} in ${place.city}, matching a ${place.category} activity vibe.`;
+  };
+
+  const recoverExploreSessionToken = async () => {
+    localStorage.removeItem("slo_session_token");
+    const raw = localStorage.getItem(GUEST_CREDENTIALS_KEY);
+    let credentials: { email: string; password: string; displayName: string; phone?: string } | null = null;
+
+    if (raw) {
+      try {
+        credentials = JSON.parse(raw);
+      } catch {
+        credentials = null;
+      }
+    }
+
+    if (!credentials?.email || !credentials?.password) {
+      const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      credentials = {
+        email: `guest-${suffix}@guest.local`,
+        password: `guest-${Math.random().toString(36).slice(2, 12)}`,
+        displayName: "Guest",
+        phone: "+15555550100",
+      };
+      localStorage.setItem(GUEST_CREDENTIALS_KEY, JSON.stringify(credentials));
+    }
+
+    try {
+      const signedIn = await apiFetch("/api/auth/signin", {
+        method: "POST",
+        withAuth: false,
+        body: { email: credentials.email, password: credentials.password },
+      });
+      if (signedIn?.sessionToken) {
+        localStorage.setItem("slo_session_token", signedIn.sessionToken);
+        return signedIn.sessionToken as string;
+      }
+    } catch {
+      // fallback to signup
+    }
+
+    const signedUp = await apiFetch("/api/auth/signup", {
+      method: "POST",
+      withAuth: false,
+      body: {
+        email: credentials.email,
+        password: credentials.password,
+        displayName: credentials.displayName || "Guest",
+        phone: credentials.phone || "+15555550100",
+      },
+    });
+    if (signedUp?.sessionToken) {
+      localStorage.setItem("slo_session_token", signedUp.sessionToken);
+      return signedUp.sessionToken as string;
+    }
+    return null;
+  };
+
+  const generateForPlace = async (place: (typeof places)[number]) => {
+    if (!headCircleUrl) return;
+    if (personalizedImages[place.id]) return;
+    setGeneratingPlaceId(place.id);
+
+    try {
+      const requestBody = {
+        place_name: place.name,
+        city: place.city,
+        category: place.category,
+        prompt: scenarioForPlace(place),
+        head_circle: headCircleUrl,
+        size: "1024x1024",
+      };
+      let data;
+      try {
+        data = await apiFetch("/api/agent/image-generate-personalized", {
+          method: "POST",
+          body: requestBody,
+        });
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : "";
+        if (!/session token/i.test(msg)) throw error;
+        await recoverExploreSessionToken();
+        data = await apiFetch("/api/agent/image-generate-personalized", {
+          method: "POST",
+          body: requestBody,
+        });
+      }
+
+      if (!data?.image_url) {
+        toast.error("Could not generate image for this card right now.");
+        return;
+      }
+
+      setPersonalizedImages((prev) => ({ ...prev, [place.id]: data.image_url as string }));
+      toast.success(`Generated for ${place.name}.`);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "Could not generate image right now.";
+      if (/incorrect api key|invalid api key|401/i.test(reason)) {
+        toast.error("OpenAI key is invalid on backend. Update OPENAI_API_KEY in .env and restart backend.");
+      } else if (/session token/i.test(reason)) {
+        toast.error("Session expired. Sign in again and retry.");
+      } else {
+        toast.error(reason);
+      }
+    } finally {
+      setGeneratingPlaceId((current) => (current === place.id ? null : current));
+    }
+  };
+
+  const toggleSeeYourselfMode = () => {
+    if (!headCircleUrl) {
+      toast.error("Add profile photo first: Profile -> camera -> save head circle.");
+      navigate("/profile");
+      return;
+    }
+    const next = !seeYourselfMode;
+    setSeeYourselfMode(next);
+    if (next) {
+      toast.message("Tap any place card to generate yourself there.");
+    }
   };
 
   const categories = useMemo(() => {
@@ -118,12 +255,7 @@ export function Explore() {
   const filteredEvents = sloEvents.filter(e => e.when === eventFilter);
 
   return (
-    <div
-      className="min-h-full text-white pb-20"
-      style={{
-        background: "linear-gradient(180deg, rgba(13,18,8,0.92) 0%, rgba(13,18,8,0.78) 14%, rgba(13,18,8,0) 36%)",
-      }}
-    >
+    <div className="min-h-[100dvh] bg-transparent text-white pb-20">
       <PageHeader />
 
       {/* Header - fixed clash by using smaller text */}
@@ -205,6 +337,17 @@ export function Explore() {
               CLEAR
             </button>
           )}
+          <button
+            onClick={toggleSeeYourselfMode}
+            className={clsx(
+              "whitespace-nowrap px-2.5 py-1 rounded-full text-[9px] font-black tracking-wider transition-all border",
+              seeYourselfMode
+                ? "bg-[#F2E8CF]/85 text-[#233216] border-[#F2E8CF]/80"
+                : "bg-white/8 text-white/50 border-white/10"
+            )}
+          >
+            {seeYourselfMode ? "SEE YOURSELF ON" : "SEE YOURSELF HERE"}
+          </button>
         </div>
 
         <div className="bg-white/10 backdrop-blur-sm border border-white/15 rounded-xl p-3 mb-3">
@@ -312,11 +455,13 @@ export function Explore() {
                   initial={{ opacity: 0, y: 10 }}
                   whileInView={{ opacity: 1, y: 0 }}
                   viewport={{ once: true }}
-                  onClick={() => navigate(`/event/${place.id}`, { state: { from: "/explore" } })}
+                  onClick={() => {
+                    navigate(`/event/${place.id}`, { state: { from: "/explore" } });
+                  }}
                   className="group relative bg-white/10 rounded-xl overflow-hidden border border-white/15 cursor-pointer active:scale-[0.97] transition-transform"
                 >
                   <div className="aspect-[4/3] overflow-hidden relative">
-                    <img src={place.image || fallbackImage} alt={place.name}
+                    <img src={(seeYourselfMode && personalizedImages[place.id]) || place.image || fallbackImage} alt={place.name}
                       className="w-full h-full object-cover" loading="lazy"
                     />
                     <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" />
@@ -348,6 +493,44 @@ export function Explore() {
                         <MapPin size={8} /> {place.city}
                       </p>
                     </div>
+
+                    {seeYourselfMode && personalizedImages[place.id] && (
+                      <div className="absolute top-2 left-2 px-2 py-1 rounded-full bg-[#F2E8CF]/85 text-[#233216] text-[8px] font-black tracking-wider uppercase border border-[#F2E8CF]/80">
+                        You Here
+                      </div>
+                    )}
+
+                    {seeYourselfMode && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void generateForPlace(place);
+                        }}
+                        disabled={generatingPlaceId === place.id}
+                        className={clsx(
+                          "absolute bottom-2 right-2 px-2.5 py-1 rounded-full text-[8px] font-black tracking-wider uppercase border backdrop-blur-sm transition-all",
+                          generatingPlaceId === place.id
+                            ? "bg-white/15 text-white/60 border-white/20"
+                            : personalizedImages[place.id]
+                              ? "bg-[#F2E8CF]/85 text-[#233216] border-[#F2E8CF]/80"
+                              : "bg-black/55 text-[#F2E8CF] border-[#F2E8CF]/35 active:scale-95"
+                        )}
+                      >
+                        {generatingPlaceId === place.id
+                          ? "Generating..."
+                          : personalizedImages[place.id]
+                            ? "Regenerate"
+                            : "Generate Me Here"}
+                      </button>
+                    )}
+
+                    {seeYourselfMode && generatingPlaceId === place.id && (
+                      <div className="absolute inset-0 bg-black/45 backdrop-blur-[1px] flex items-center justify-center">
+                        <span className="px-2 py-1 rounded-full bg-[#F2E8CF]/90 text-[#233216] text-[9px] font-black tracking-wider uppercase">
+                          Generating...
+                        </span>
+                      </div>
+                    )}
                   </div>
 
                   <div className="px-2 py-1.5 flex items-center gap-1.5">

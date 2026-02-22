@@ -458,9 +458,160 @@ function generatePlanOptions({ constraints, recommendations }) {
   return options;
 }
 
+const SLO_KNOWLEDGE_NOTES = [
+  "SLO stands for San Luis Obispo.",
+  "Mission San Luis Obispo de Tolosa was founded in 1772.",
+  "Cal Poly is a major campus anchor for student life in SLO.",
+  "Downtown SLO Farmer's Market runs on Thursday evenings.",
+  "Popular local categories: beaches, hikes, coffee, food, live music, campus events."
+];
+
+function summarizeUserContext(userId, clientContext = {}) {
+  const prefs = getOrInitPreferences(userId);
+  const connections = getOrInitConnections(userId);
+  const studyLoad = computeStudyLoad(userId);
+  const tasks = store.studyTasks
+    .filter((task) => task.user_id === userId && !task.done)
+    .sort((a, b) => new Date(a.due_at || 0).getTime() - new Date(b.due_at || 0).getTime())
+    .slice(0, 10);
+  const plans = store.plans.filter((plan) => plan.host_user_id === userId).slice(-8);
+  const joinedPlanIds = new Set(
+    store.planParticipants.filter((row) => row.user_id === userId).map((row) => row.plan_id)
+  );
+  const participantPlans = store.plans.filter((plan) => joinedPlanIds.has(plan.id)).slice(-8);
+  const jams = store.jamMembers
+    .filter((row) => row.user_id === userId)
+    .map((row) => store.jams.find((jam) => jam.id === row.jam_id))
+    .filter(Boolean)
+    .slice(-8);
+  const userGroups = store.groups.filter((group) => group.owner_user_id === userId).slice(-8);
+  const eventStates = store.userEventStates.filter((row) => row.user_id === userId);
+  const confirmedEvents = eventStates.filter((row) => row.state === "confirmed").length;
+  const maybeEvents = eventStates.filter((row) => row.state === "maybe").length;
+  const savedEvents = eventStates.filter((row) => row.state === "saved").length;
+
+  return {
+    client_context: clientContext,
+    preferences: prefs,
+    connections,
+    study_load: studyLoad,
+    upcoming_tasks: tasks,
+    plans: plans.map((plan) => ({
+      id: plan.id,
+      title: plan.title,
+      status: plan.status,
+      created_at: plan.created_at
+    })),
+    participant_plans: participantPlans.map((plan) => ({
+      id: plan.id,
+      title: plan.title,
+      status: plan.status
+    })),
+    jams: jams.map((jam) => ({
+      id: jam.id,
+      code: jam.code,
+      name: jam.name,
+      status: jam.status
+    })),
+    groups: userGroups.map((group) => ({
+      id: group.id,
+      name: group.name
+    })),
+    event_state_summary: {
+      confirmed: confirmedEvents,
+      maybe: maybeEvents,
+      saved: savedEvents
+    },
+    available_catalog_categories: [...new Set(store.eventsCatalog.map((item) => item.category))],
+    slo_knowledge: SLO_KNOWLEDGE_NOTES
+  };
+}
+
+function createPendingAction(payload) {
+  const actionId = randomUUID();
+  store.pendingActions.set(actionId, payload);
+  return {
+    action_id: actionId,
+    type: payload.type,
+    payload,
+    requires_confirmation: true
+  };
+}
+
+function extractJamCodeFromMessage(message) {
+  const match = String(message || "").toUpperCase().match(/\b[A-Z0-9]{4,10}\b/);
+  return match ? match[0] : "";
+}
+
+function inferProposedActions({ userId, message, cards, userContext }) {
+  const lower = String(message || "").toLowerCase();
+  const actions = [];
+  const primaryCardId = cards[0]?.id || store.eventsCatalog[0]?.id || "event-brew-quiet";
+
+  if (/(plan my day|build my schedule|create a time-blocked schedule|make an agenda|create plan|make a plan|plan)/.test(lower)) {
+    actions.push(createPendingAction({
+      type: "create_plan_draft",
+      title: "Jarvis Plan Draft",
+      constraints: {
+        weather: String(userContext?.client_context?.weather || "clear"),
+        timeOfDay: String(userContext?.client_context?.timeOfDay || "evening"),
+        durationMin: 120
+      }
+    }));
+  }
+
+  if (/(rsvp|confirm this|save this event|mark as maybe|book this event)/.test(lower)) {
+    const wantsMaybe = /(maybe|not sure)/.test(lower);
+    const wantsSaved = /(save|bookmark|pin)/.test(lower);
+    actions.push(createPendingAction({
+      type: "rsvp_event",
+      item_id: primaryCardId,
+      state: wantsSaved ? "saved" : wantsMaybe ? "maybe" : "confirmed"
+    }));
+  }
+
+  const jamCode = extractJamCodeFromMessage(message);
+  if (/(join jam|accept jam|jam code|join code)/.test(lower)) {
+    actions.push(createPendingAction({
+      type: "join_jam",
+      code: jamCode || "DEMO42"
+    }));
+  }
+
+  if (/(add task|add assignment|new task|remind me|study task|homework task)/.test(lower)) {
+    const titleMatch = String(message || "").match(/(?:add task|add assignment|new task)\s*:?(.+)$/i);
+    const title = titleMatch?.[1]?.trim() || "Jarvis task";
+    actions.push(createPendingAction({
+      type: "add_study_task",
+      title,
+      due_at: new Date(Date.now() + 1000 * 60 * 60 * 24).toISOString(),
+      course: "General",
+      duration_min: 60
+    }));
+  }
+
+  if (/(reservation|book|booking|zipcar|apple pay|pay|dinner booking|table)/.test(lower)) {
+    actions.push(createPendingAction({
+      type: "create_booking_intent",
+      provider: /zipcar/.test(lower) ? "zipcar" : "external",
+      item_id: primaryCardId
+    }));
+  }
+
+  if (!actions.length && /(what can you automate|what can you do|automate)/.test(lower)) {
+    actions.push(createPendingAction({
+      type: "create_plan_draft",
+      title: "Automation Demo Plan",
+      constraints: { durationMin: 90, weather: "clear", timeOfDay: "afternoon" }
+    }));
+  }
+
+  return actions;
+}
+
 async function generateAssistantReply(payload) {
   if (!process.env.OPENAI_API_KEY) {
-    return "Here are options ranked from your study load, vibe, and budget. I can draft a plan or create invite links if you confirm.";
+    return "I pulled your app context and ranked options. I can automate plan drafts, RSVPs, jam joins, tasks, and booking intents after you confirm.";
   }
 
   try {
@@ -473,8 +624,14 @@ async function generateAssistantReply(payload) {
       input: [
         {
           role: "system",
-          content:
-            "You are OpenJarvis for SLO Planner. Be concise. Recommend activities and plans based on workload. Never claim writes are done before explicit confirmation."
+          content: [
+            "You are OpenJarvis for SLO Planner.",
+            "Use the provided JSON app context as source of truth.",
+            "Recommend concrete next actions from the user's real plans/tasks/events.",
+            "When proposing writes, never claim they are complete before explicit confirmation.",
+            "If user request is ambiguous, ask 1-2 concise clarifying questions first.",
+            "Favor specific SLO suggestions with rationale tied to workload, weather, budget, and timing."
+          ].join(" ")
         },
         {
           role: "user",
@@ -949,40 +1106,6 @@ export function registerPlannerApi(app) {
         display_name: user.display_name,
         phone: user.phone || "",
         onboarding_complete: user.onboarding_complete
-      }
-    });
-  });
-
-  app.post("/api/auth/demo-session", (req, res) => {
-    const email = normalizeEmail(req.body?.email || "demo@polyjarvis.local");
-    const displayName = String(req.body?.display_name || "Demo User").trim() || "Demo User";
-
-    let user = [...store.users.values()].find((candidate) => candidate.email === email);
-    if (!user) {
-      user = {
-        id: randomUUID(),
-        email,
-        password: randomUUID(),
-        display_name: displayName,
-        phone: normalizePhone(req.body?.phone || DEMO_GUEST_PHONE_NUMBER || ""),
-        onboarding_complete: false,
-        created_at: NOW().toISOString()
-      };
-      store.users.set(user.id, user);
-    }
-
-    const sessionToken = randomUUID();
-    store.sessions.set(sessionToken, user.id);
-    markStoreDirty();
-
-    res.json({
-      sessionToken,
-      user: {
-        id: user.id,
-        email: user.email,
-        display_name: user.display_name,
-        phone: user.phone || "",
-        onboarding_complete: Boolean(user.onboarding_complete)
       }
     });
   });
@@ -1769,88 +1892,111 @@ export function registerPlannerApi(app) {
   });
 
   app.post("/api/twilio/voice/reservation-twiml", (req, res) => {
-    const jobId = String(req.query?.jobId || "");
-    const job = store.reservationCallJobs.get(jobId);
-    if (!job) {
-      res.status(404).type("text/xml").send("<Response><Say>Call request not found.</Say></Response>");
-      return;
-    }
-
     const twiml = new twilio.twiml.VoiceResponse();
-    twiml.say({ voice: "alice", language: "en-US" }, job.voice_script || "Hello. This is a reservation request.");
-    twiml.pause({ length: 1 });
-    const gather = twiml.gather({
-      input: "dtmf",
-      numDigits: 1,
-      action: twilioWebhookUrl(`/api/twilio/voice/input?jobId=${encodeURIComponent(jobId)}`),
-      method: "POST",
-      timeout: 7,
-      actionOnEmptyResult: true
-    });
-    gather.say(
-      { voice: "alice", language: "en-US" },
-      "To confirm this reservation request, press 1. If this time does not work, press 2."
-    );
-    twiml.say({ voice: "alice", language: "en-US" }, "No selection received. This request will be marked as declined due to timeout.");
-    twiml.hangup();
+    try {
+      const jobId = String(req.query?.jobId || "");
+      const job = store.reservationCallJobs.get(jobId);
 
-    job.status = "in-progress";
-    job.updated_at = NOW().toISOString();
-    store.reservationCallJobs.set(jobId, job);
-    markStoreDirty();
+      if (!job) {
+        twiml.say({ voice: "alice", language: "en-US" }, "This reservation request is no longer available. Goodbye.");
+        twiml.hangup();
+        res.status(200).type("text/xml").send(twiml.toString());
+        return;
+      }
 
-    res.type("text/xml").send(twiml.toString());
+      twiml.say({ voice: "alice", language: "en-US" }, job.voice_script || "Hello. This is a reservation request.");
+      twiml.pause({ length: 1 });
+      const gather = twiml.gather({
+        input: "dtmf",
+        numDigits: 1,
+        action: twilioWebhookUrl(`/api/twilio/voice/input?jobId=${encodeURIComponent(jobId)}`),
+        method: "POST",
+        timeout: 7,
+        actionOnEmptyResult: true
+      });
+      gather.say(
+        { voice: "alice", language: "en-US" },
+        "To confirm this reservation request, press 1. If this time does not work, press 2."
+      );
+      twiml.say({ voice: "alice", language: "en-US" }, "No selection received. This request will be marked as declined due to timeout.");
+      twiml.hangup();
+
+      job.status = "in-progress";
+      job.updated_at = NOW().toISOString();
+      store.reservationCallJobs.set(jobId, job);
+      markStoreDirty();
+
+      res.status(200).type("text/xml").send(twiml.toString());
+    } catch {
+      twiml.say({ voice: "alice", language: "en-US" }, "We are unable to process this request right now. Goodbye.");
+      twiml.hangup();
+      res.status(200).type("text/xml").send(twiml.toString());
+    }
   });
 
   app.post("/api/twilio/voice/input", async (req, res) => {
-    const jobId = String(req.query?.jobId || "");
-    const digit = String(req.body?.Digits || "").trim();
-    const job = store.reservationCallJobs.get(jobId);
-    if (!job) {
-      res.status(404).type("text/xml").send("<Response><Say>Call request not found.</Say></Response>");
-      return;
-    }
-
     const twiml = new twilio.twiml.VoiceResponse();
-    job.decision_digit = digit;
+    try {
+      const jobId = String(req.query?.jobId || "");
+      const digit = String(req.body?.Digits || "").trim();
+      const job = store.reservationCallJobs.get(jobId);
+      if (!job) {
+        twiml.say({ voice: "alice", language: "en-US" }, "This reservation request has expired. Goodbye.");
+        twiml.hangup();
+        res.status(200).type("text/xml").send(twiml.toString());
+        return;
+      }
 
-    if (digit === "1") {
-      job.reservation_decision = "confirmed";
-      job.status = "reservation-confirmed";
-      twiml.say({ voice: "alice", language: "en-US" }, "Thank you. Reservation confirmed.");
-      // SMS workflow intentionally paused for demo approval timing.
-      // If re-enabled, call `sendGroupReservationSms(...)` here and map provider results.
-      job.sms_notifications = {
-        state: "paused",
-        sent: 0,
-        failed: 0,
-        recipients: 0,
-        errors: [
-          "SMS demo paused: we were close to shipping group confirmation texts, but approval timing did not complete before the demo window."
-        ]
-      };
-    } else if (digit === "2") {
-      job.reservation_decision = "declined";
-      job.status = "reservation-declined";
-      twiml.say({ voice: "alice", language: "en-US" }, "Thank you. We have marked this request as declined.");
-    } else if (!digit) {
-      job.decision_digit = "2";
-      job.reservation_decision = "declined-timeout";
-      job.status = "reservation-timeout";
-      twiml.say({ voice: "alice", language: "en-US" }, "No selection received. This request is marked as declined due to timeout.");
-    } else {
-      job.reservation_decision = "no-response";
-      job.status = "awaiting-followup";
-      twiml.say({ voice: "alice", language: "en-US" }, "No valid selection was received.");
+      job.decision_digit = digit;
+
+      if (digit === "1") {
+        job.reservation_decision = "confirmed";
+        job.status = "reservation-confirmed";
+        twiml.say({ voice: "alice", language: "en-US" }, "Thank you. Reservation confirmed.");
+        const smsResult = await sendGroupReservationSms({
+          userId: job.user_id,
+          groupId: job.group_id,
+          restaurantName: job.restaurant_name,
+          partySize: job.party_size,
+          reservationTime: job.reservation_time
+        });
+        const smsState = smsResult.errors.length > 0 && smsResult.sent === 0 && smsResult.recipients.length === 0
+          ? "paused"
+          : smsResult.failed > 0
+            ? "partial"
+            : "sent";
+        job.sms_notifications = {
+          state: smsState,
+          sent: smsResult.sent,
+          failed: smsResult.failed,
+          recipients: smsResult.recipients.length,
+          errors: smsResult.errors
+        };
+      } else if (digit === "2") {
+        job.reservation_decision = "declined";
+        job.status = "reservation-declined";
+        twiml.say({ voice: "alice", language: "en-US" }, "Thank you. We have marked this request as declined.");
+      } else if (!digit) {
+        job.decision_digit = "2";
+        job.reservation_decision = "declined-timeout";
+        job.status = "reservation-timeout";
+        twiml.say({ voice: "alice", language: "en-US" }, "No selection received. This request is marked as declined due to timeout.");
+      } else {
+        job.reservation_decision = "no-response";
+        job.status = "awaiting-followup";
+        twiml.say({ voice: "alice", language: "en-US" }, "No valid selection was received.");
+      }
+
+      job.updated_at = NOW().toISOString();
+      store.reservationCallJobs.set(jobId, job);
+      markStoreDirty();
+    } catch {
+      twiml.say({ voice: "alice", language: "en-US" }, "We could not process that input right now.");
     }
-
-    job.updated_at = NOW().toISOString();
-    store.reservationCallJobs.set(jobId, job);
-    markStoreDirty();
 
     twiml.say({ voice: "alice", language: "en-US" }, "Goodbye.");
     twiml.hangup();
-    res.type("text/xml").send(twiml.toString());
+    res.status(200).type("text/xml").send(twiml.toString());
   });
 
   app.post("/api/twilio/voice/status", async (req, res) => {
@@ -1906,7 +2052,12 @@ export function registerPlannerApi(app) {
       return;
     }
 
-    const decisionLocked = new Set(["reservation-confirmed", "reservation-declined", "reservation-timeout", "awaiting-followup"]);
+    const decisionLocked = new Set([
+      "reservation-confirmed",
+      "reservation-declined",
+      "reservation-timeout",
+      "awaiting-followup"
+    ]);
     if (decisionLocked.has(job.status)) {
       job.updated_at = NOW().toISOString();
       store.reservationCallJobs.set(jobId, job);
@@ -1940,12 +2091,13 @@ export function registerPlannerApi(app) {
     }
 
     const context = req.body?.context || {};
+    const userContext = summarizeUserContext(auth.userId, context);
     const recommendations = rankedRecommendations(auth.userId, {
       weather: context.weather || "clear",
       timeOfDay: context.timeOfDay || "evening"
     });
 
-    const cards = recommendations.slice(0, 3).map((item) => ({
+    const cards = recommendations.slice(0, 5).map((item) => ({
       id: item.id,
       title: item.title,
       subtitle: item.description,
@@ -1954,58 +2106,28 @@ export function registerPlannerApi(app) {
       score: item.score
     }));
 
-    const proposedActions = [];
-    const lower = message.toLowerCase();
+    const proposedActions = inferProposedActions({
+      userId: auth.userId,
+      message,
+      cards,
+      userContext
+    });
 
-    if (lower.includes("plan")) {
-      const actionId = randomUUID();
-      const payload = {
-        type: "create_plan_draft",
-        title: "AI Draft Plan",
-        constraints: { timeOfDay: "evening", weather: "clear", durationMin: 120 }
-      };
-      store.pendingActions.set(actionId, payload);
-      proposedActions.push({ action_id: actionId, type: payload.type, payload, requires_confirmation: true });
-    }
-
-    if (lower.includes("rsvp") || lower.includes("confirm")) {
-      const actionId = randomUUID();
-      const payload = {
-        type: "rsvp_event",
-        item_id: cards[0]?.id || store.eventsCatalog[0].id,
-        state: "confirmed"
-      };
-      store.pendingActions.set(actionId, payload);
-      proposedActions.push({ action_id: actionId, type: payload.type, payload, requires_confirmation: true });
-    }
-
-    if (lower.includes("jam")) {
-      const actionId = randomUUID();
-      const payload = { type: "join_jam", code: "DEMO42" };
-      store.pendingActions.set(actionId, payload);
-      proposedActions.push({ action_id: actionId, type: payload.type, payload, requires_confirmation: true });
-    }
-
-    if (lower.includes("task") || lower.includes("study")) {
-      const actionId = randomUUID();
-      const payload = {
-        type: "add_study_task",
-        title: "AI-added study block",
-        due_at: new Date(Date.now() + 1000 * 60 * 60 * 24).toISOString(),
-        course: "General"
-      };
-      store.pendingActions.set(actionId, payload);
-      proposedActions.push({ action_id: actionId, type: payload.type, payload, requires_confirmation: true });
-    }
-
-    if (lower.includes("book") || lower.includes("reservation") || lower.includes("zipcar")) {
-      const actionId = randomUUID();
-      const payload = { type: "create_booking_intent", provider: "external", item_id: cards[0]?.id || "event-brew-quiet" };
-      store.pendingActions.set(actionId, payload);
-      proposedActions.push({ action_id: actionId, type: payload.type, payload, requires_confirmation: true });
-    }
-
-    const assistantText = await generateAssistantReply({ message, context, cards, proposedActions });
+    const assistantText = await generateAssistantReply({
+      message,
+      context: userContext,
+      cards,
+      proposedActions,
+      capabilities: [
+        "plan_draft",
+        "rsvp_event",
+        "join_jam",
+        "add_study_task",
+        "booking_intent",
+        "calendar/canvas connection-aware recommendations",
+        "study-load-aware prioritization"
+      ]
+    });
 
     store.aiActionLogs.push({
       id: randomUUID(),
@@ -2016,7 +2138,154 @@ export function registerPlannerApi(app) {
       created_at: NOW().toISOString()
     });
 
-    res.json({ assistant_text: assistantText, cards, proposed_actions: proposedActions });
+    res.json({
+      assistant_text: assistantText,
+      cards,
+      proposed_actions: proposedActions,
+      context_used: userContext
+    });
+  });
+
+  app.get("/api/agent/context", (req, res) => {
+    const auth = requireSession(req, res);
+    if (!auth) return;
+    const clientContext = {
+      weather: String(req.query.weather || "clear"),
+      timeOfDay: String(req.query.timeOfDay || "evening"),
+      activeScreen: String(req.query.activeScreen || "/jarvis")
+    };
+    res.json({
+      user_context: summarizeUserContext(auth.userId, clientContext),
+      recommendations: rankedRecommendations(auth.userId, clientContext).slice(0, 5)
+    });
+  });
+
+  app.post("/api/agent/image-generate", async (req, res) => {
+    const auth = requireSession(req, res);
+    if (!auth) return;
+
+    const prompt = String(req.body?.prompt || "").trim();
+    const requestedSize = String(req.body?.size || "1024x1024").trim();
+    const allowedSizes = new Set(["1024x1024", "1024x1536", "1536x1024"]);
+    const size = allowedSizes.has(requestedSize) ? requestedSize : "1024x1024";
+
+    if (!prompt) {
+      res.status(400).json({ error: "prompt is required" });
+      return;
+    }
+
+    if (!process.env.OPENAI_API_KEY) {
+      res.status(500).json({ error: "OPENAI_API_KEY is missing on backend." });
+      return;
+    }
+
+    try {
+      if (!openai) {
+        openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+      }
+
+      const response = await openai.images.generate({
+        model: "gpt-image-1",
+        prompt,
+        size
+      });
+
+      const generated = response?.data?.[0];
+      const b64 = generated?.b64_json;
+      const imageUrl = generated?.url || (b64 ? `data:image/png;base64,${b64}` : "");
+
+      if (!imageUrl) {
+        res.status(502).json({ error: "Image generation returned no image payload." });
+        return;
+      }
+
+      res.json({
+        image_url: imageUrl,
+        revised_prompt: generated?.revised_prompt || null,
+        size
+      });
+    } catch (error) {
+      res.status(502).json({
+        error: error instanceof Error ? error.message : "Image generation failed"
+      });
+    }
+  });
+
+  app.post("/api/agent/image-generate-personalized", async (req, res) => {
+    const auth = requireSession(req, res);
+    if (!auth) return;
+
+    const placeName = String(req.body?.place_name || "San Luis Obispo destination").trim();
+    const city = String(req.body?.city || "San Luis Obispo").trim();
+    const category = String(req.body?.category || "activity").trim();
+    const basePrompt = String(req.body?.prompt || "").trim();
+    const headCircle = String(req.body?.head_circle || "").trim();
+    const requestedSize = String(req.body?.size || "1024x1024").trim();
+    const allowedSizes = new Set(["1024x1024", "1024x1536", "1536x1024"]);
+    const size = allowedSizes.has(requestedSize) ? requestedSize : "1024x1024";
+
+    if (!headCircle || !headCircle.startsWith("data:image/")) {
+      res.status(400).json({ error: "head_circle image data URL is required." });
+      return;
+    }
+
+    if (!process.env.OPENAI_API_KEY) {
+      res.status(500).json({ error: "OPENAI_API_KEY is missing on backend." });
+      return;
+    }
+
+    const scenarioPrompt = basePrompt || `Create a photorealistic travel photo of this exact person at ${placeName} in ${city}. The activity vibe should match ${category}. Keep face identity consistent, natural lighting, realistic proportions, and believable scene composition.`;
+
+    try {
+      if (!openai) {
+        openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+      }
+
+      const match = headCircle.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+      if (!match) {
+        res.status(400).json({ error: "Invalid head_circle data URL format." });
+        return;
+      }
+      const mime = match[1];
+      const b64 = match[2];
+      const bytes = Buffer.from(b64, "base64");
+      const ext = mime.includes("png") ? "png" : "jpg";
+      const file = new File([bytes], `head-circle.${ext}`, { type: mime });
+
+      let generated = null;
+      try {
+        const edited = await openai.images.edit({
+          model: "gpt-image-1",
+          image: file,
+          prompt: scenarioPrompt,
+          size
+        });
+        generated = edited?.data?.[0] || null;
+      } catch {
+        const fallback = await openai.images.generate({
+          model: "gpt-image-1",
+          prompt: `${scenarioPrompt} Keep the same person from the provided profile head reference.`,
+          size
+        });
+        generated = fallback?.data?.[0] || null;
+      }
+
+      const outUrl = generated?.url || (generated?.b64_json ? `data:image/png;base64,${generated.b64_json}` : "");
+      if (!outUrl) {
+        res.status(502).json({ error: "Personalized image generation returned no image payload." });
+        return;
+      }
+
+      res.json({
+        image_url: outUrl,
+        revised_prompt: generated?.revised_prompt || null,
+        size
+      });
+    } catch (error) {
+      res.status(502).json({
+        error: error instanceof Error ? error.message : "Personalized image generation failed"
+      });
+    }
   });
 
   app.post("/api/agent/actions/:actionId/confirm", (req, res) => {

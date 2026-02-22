@@ -8,6 +8,7 @@ import { supabase } from "/utils/supabase/client";
 
 const STATUS_KEY = "polyjarvis_status";
 const AVATAR_KEY = "polyjarvis_avatar";
+const HEAD_CIRCLE_KEY = "polyjarvis_head_circle";
 const TRAIN_KEY = "polyjarvis_training";
 
 const trainingPrompts = [
@@ -47,6 +48,12 @@ export function Profile() {
   const [status, setStatus] = useState<StatusId>("exploring");
   const [showStatusPicker, setShowStatusPicker] = useState(false);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [headCircleUrl, setHeadCircleUrl] = useState<string | null>(null);
+  const [showHeadEditor, setShowHeadEditor] = useState(false);
+  const [editorImage, setEditorImage] = useState<string | null>(null);
+  const [editorZoom, setEditorZoom] = useState(1.2);
+  const [editorOffsetX, setEditorOffsetX] = useState(0);
+  const [editorOffsetY, setEditorOffsetY] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Train Jarvis state
@@ -99,6 +106,8 @@ export function Profile() {
     if (saved) setStatus(saved as StatusId);
     const avatar = localStorage.getItem(AVATAR_KEY);
     if (avatar) setAvatarUrl(avatar);
+    const headCircle = localStorage.getItem(HEAD_CIRCLE_KEY);
+    if (headCircle) setHeadCircleUrl(headCircle);
   }, []);
 
   const handleSignOut = async () => {
@@ -125,11 +134,52 @@ export function Profile() {
     const reader = new FileReader();
     reader.onload = () => {
       const dataUrl = reader.result as string;
-      setAvatarUrl(dataUrl);
-      localStorage.setItem(AVATAR_KEY, dataUrl);
-      toast.success("Profile picture updated!");
+      setEditorImage(dataUrl);
+      setEditorZoom(1.2);
+      setEditorOffsetX(0);
+      setEditorOffsetY(0);
+      setShowHeadEditor(true);
     };
     reader.readAsDataURL(file);
+  };
+
+  const saveHeadCircle = () => {
+    if (!editorImage) return;
+    const img = new Image();
+    img.onload = () => {
+      const size = 512;
+      const radius = 220;
+      const canvas = document.createElement("canvas");
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+
+      ctx.clearRect(0, 0, size, size);
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(size / 2, size / 2, radius, 0, Math.PI * 2);
+      ctx.closePath();
+      ctx.clip();
+
+      const baseScale = Math.max((radius * 2) / img.width, (radius * 2) / img.height);
+      const scale = baseScale * editorZoom;
+      const drawW = img.width * scale;
+      const drawH = img.height * scale;
+      const drawX = (size - drawW) / 2 + editorOffsetX;
+      const drawY = (size - drawH) / 2 + editorOffsetY;
+      ctx.drawImage(img, drawX, drawY, drawW, drawH);
+      ctx.restore();
+
+      const circleData = canvas.toDataURL("image/png");
+      setAvatarUrl(circleData);
+      setHeadCircleUrl(circleData);
+      localStorage.setItem(AVATAR_KEY, circleData);
+      localStorage.setItem(HEAD_CIRCLE_KEY, circleData);
+      setShowHeadEditor(false);
+      toast.success("Profile photo and head circle saved!");
+    };
+    img.src = editorImage;
   };
 
   const currentStatus = statusOptions.find(s => s.id === status)!;
@@ -197,6 +247,11 @@ export function Profile() {
               className="hidden"
             />
           </div>
+          {headCircleUrl && (
+            <div className="text-[10px] text-white/45">
+              Profile ready for Explore "Me Here" cards
+            </div>
+          )}
           <div>
             <h1 className="text-xl font-black uppercase tracking-wider">{user.user_metadata?.name || "STUDENT EXPLORER"}</h1>
             <p className="text-white/35 text-xs font-medium">{user.email}</p>
@@ -358,6 +413,85 @@ export function Profile() {
       </div>
 
       <BottomNav />
+
+      {/* Head circle editor */}
+      {showHeadEditor && editorImage && (
+        <div className="fixed inset-0 z-[70] bg-black/65 backdrop-blur-sm flex items-center justify-center px-5">
+          <div className="w-full max-w-sm bg-[#1a2e10]/95 border border-white/15 rounded-2xl p-4">
+            <h3 className="text-sm font-black text-white uppercase tracking-wider">Set Head Circle</h3>
+            <p className="text-[11px] text-white/45 mt-1 mb-3">Position your face inside the circle for "Me Here" generation.</p>
+
+            <div className="relative w-full aspect-square rounded-xl overflow-hidden border border-white/15 bg-black/30">
+              <img
+                src={editorImage}
+                alt="Editor"
+                className="absolute inset-0 w-full h-full object-cover select-none pointer-events-none"
+                style={{ transform: `translate(${editorOffsetX}px, ${editorOffsetY}px) scale(${editorZoom})` }}
+              />
+              <div className="absolute inset-0 pointer-events-none">
+                <div
+                  className="absolute border-2 border-[#F2E8CF] rounded-full shadow-[0_0_0_9999px_rgba(0,0,0,0.45)]"
+                  style={{ width: "70%", height: "70%", left: "15%", top: "15%" }}
+                />
+              </div>
+            </div>
+
+            <div className="mt-3 space-y-2">
+              <label className="block text-[10px] font-bold text-white/55 uppercase tracking-wider">
+                Zoom
+                <input
+                  type="range"
+                  min={1}
+                  max={2.8}
+                  step={0.01}
+                  value={editorZoom}
+                  onChange={(e) => setEditorZoom(Number(e.target.value))}
+                  className="w-full mt-1"
+                />
+              </label>
+              <label className="block text-[10px] font-bold text-white/55 uppercase tracking-wider">
+                Move Left / Right
+                <input
+                  type="range"
+                  min={-140}
+                  max={140}
+                  step={1}
+                  value={editorOffsetX}
+                  onChange={(e) => setEditorOffsetX(Number(e.target.value))}
+                  className="w-full mt-1"
+                />
+              </label>
+              <label className="block text-[10px] font-bold text-white/55 uppercase tracking-wider">
+                Move Up / Down
+                <input
+                  type="range"
+                  min={-140}
+                  max={140}
+                  step={1}
+                  value={editorOffsetY}
+                  onChange={(e) => setEditorOffsetY(Number(e.target.value))}
+                  className="w-full mt-1"
+                />
+              </label>
+            </div>
+
+            <div className="flex gap-2 mt-4">
+              <button
+                onClick={() => setShowHeadEditor(false)}
+                className="flex-1 py-2.5 rounded-xl bg-white/8 border border-white/12 text-white/65 text-xs font-bold"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveHeadCircle}
+                className="flex-1 py-2.5 rounded-xl bg-[#F2E8CF] text-[#233216] text-xs font-black uppercase tracking-wider"
+              >
+                Save Circle
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

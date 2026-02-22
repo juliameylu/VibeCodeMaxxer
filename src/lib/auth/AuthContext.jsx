@@ -10,6 +10,16 @@ import {
 
 const AuthContext = createContext(null);
 const GUEST_CREDENTIALS_KEY = "slo_guest_credentials";
+const USER_ID_KEY = "slo_user_id";
+
+function setActiveUserId(user) {
+  if (user?.id) {
+    localStorage.setItem(USER_ID_KEY, user.id);
+  } else {
+    localStorage.removeItem(USER_ID_KEY);
+  }
+  window.dispatchEvent(new Event("slo-auth-changed"));
+}
 
 function getGuestCredentials() {
   const raw = localStorage.getItem(GUEST_CREDENTIALS_KEY);
@@ -79,6 +89,7 @@ export function AuthProvider({ children }) {
         saveSessionToken(data.sessionToken);
         setSessionToken(data.sessionToken);
         setUser(data.user || null);
+        setActiveUserId(data.user || null);
         return true;
       } catch {
         return false;
@@ -105,11 +116,13 @@ export function AuthProvider({ children }) {
           clearSessionToken();
           setSessionToken("");
           setUser(null);
+          setActiveUserId(null);
           await authenticateGuest();
           return;
         }
 
         setUser(data.user || null);
+        setActiveUserId(data.user || null);
         setPreferences(data.preferences || null);
         setConnections(data.connections || null);
         setBadges(data.badges || { calendar: false, canvas: false });
@@ -117,6 +130,7 @@ export function AuthProvider({ children }) {
         clearSessionToken();
         setSessionToken("");
         setUser(null);
+        setActiveUserId(null);
       } finally {
         if (active) setLoading(false);
       }
@@ -150,6 +164,7 @@ export function AuthProvider({ children }) {
         saveSessionToken(data.sessionToken);
         setSessionToken(data.sessionToken);
         setUser(data.user);
+        setActiveUserId(data.user);
         return data.user;
       },
       async signIn({ email, password }) {
@@ -162,6 +177,7 @@ export function AuthProvider({ children }) {
         saveSessionToken(data.sessionToken);
         setSessionToken(data.sessionToken);
         setUser(data.user);
+        setActiveUserId(data.user);
         return data.user;
       },
       async continueAsGuest() {
@@ -180,6 +196,7 @@ export function AuthProvider({ children }) {
           saveSessionToken(signedIn.sessionToken);
           setSessionToken(signedIn.sessionToken);
           setUser(signedIn.user);
+          setActiveUserId(signedIn.user);
           return signedIn.user;
         } catch {
           const signedUp = await apiFetch("/api/auth/signup", {
@@ -195,6 +212,7 @@ export function AuthProvider({ children }) {
           saveSessionToken(signedUp.sessionToken);
           setSessionToken(signedUp.sessionToken);
           setUser(signedUp.user);
+          setActiveUserId(signedUp.user);
           return signedUp.user;
         }
       },
@@ -203,6 +221,7 @@ export function AuthProvider({ children }) {
         clearGuestCredentials();
         setSessionToken("");
         setUser(null);
+        setActiveUserId(null);
         setPreferences(null);
         setConnections(null);
         setBadges({ calendar: false, canvas: false });

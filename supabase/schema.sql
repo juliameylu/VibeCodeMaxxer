@@ -28,6 +28,16 @@ create table if not exists connections (
   updated_at timestamptz default now()
 );
 
+create table if not exists calendar_tokens (
+  user_id uuid primary key references profiles(id) on delete cascade,
+  provider text not null,
+  access_token text,
+  refresh_token text,
+  scope text,
+  expires_at timestamptz,
+  updated_at timestamptz default now()
+);
+
 create table if not exists events_catalog (
   id text primary key,
   title text not null,
@@ -135,5 +145,29 @@ create table if not exists ai_action_logs (
   prompt text,
   proposed_actions_json jsonb,
   confirmed_action_id text,
+  created_at timestamptz default now()
+);
+
+create table if not exists user_availabilities (
+  id uuid primary key,
+  user_id uuid not null references profiles(id) on delete cascade,
+  start_at timestamptz not null,
+  end_at timestamptz not null,
+  source text not null default 'manual',
+  created_at timestamptz default now()
+);
+
+create index if not exists idx_user_availabilities_user_time on user_availabilities (user_id, start_at, end_at);
+
+create table if not exists reservations (
+  id uuid primary key,
+  user_id uuid not null references profiles(id) on delete cascade,
+  item_id text not null,
+  item_title text not null,
+  provider text not null,
+  slot_start_at timestamptz not null,
+  slot_end_at timestamptz not null,
+  notes text,
+  participants_json jsonb default '[]'::jsonb,
   created_at timestamptz default now()
 );
