@@ -407,6 +407,7 @@ All pages must:
   - `status`
   - `reservation_decision`
   - `decision_digit`
+- Jarvis frontend may auto-bootstrap demo auth via `POST /api/auth/demo-session` when no session token exists.
 
 ---
 

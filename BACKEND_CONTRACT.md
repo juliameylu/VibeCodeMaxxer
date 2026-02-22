@@ -38,6 +38,9 @@ No custom WebSocket servers required.
 - Client-provided `user_id` must be ignored or validated against auth context.
 - All timestamps must be UTC ISO-8601.
 
+Demo compatibility extension:
+- `POST /api/auth/demo-session` is allowed for hackathon/demo builds to mint a temporary session token for UI flows (including Jarvis reservation calls) when full auth onboarding is not completed.
+
 ## 2) Canonical ID Prefixes
 
 All IDs must be prefixed:

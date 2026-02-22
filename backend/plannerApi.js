@@ -953,6 +953,40 @@ export function registerPlannerApi(app) {
     });
   });
 
+  app.post("/api/auth/demo-session", (req, res) => {
+    const email = normalizeEmail(req.body?.email || "demo@polyjarvis.local");
+    const displayName = String(req.body?.display_name || "Demo User").trim() || "Demo User";
+
+    let user = findUserByEmail(email);
+    if (!user) {
+      user = {
+        id: randomUUID(),
+        email,
+        password_hash: hashPassword(randomUUID()),
+        display_name: displayName,
+        phone: normalizePhone(req.body?.phone || DEMO_GUEST_PHONE_NUMBER || ""),
+        onboarding_complete: false,
+        created_at: NOW().toISOString()
+      };
+      store.users.set(user.id, user);
+    }
+
+    const sessionToken = randomUUID();
+    store.sessions.set(sessionToken, user.id);
+    markStoreDirty();
+
+    res.json({
+      sessionToken,
+      user: {
+        id: user.id,
+        email: user.email,
+        display_name: user.display_name,
+        phone: user.phone || "",
+        onboarding_complete: Boolean(user.onboarding_complete)
+      }
+    });
+  });
+
   app.post("/api/auth/session-bootstrap", (req, res) => {
     const token = req.header("x-session-token") || req.body?.sessionToken;
     if (!token) {

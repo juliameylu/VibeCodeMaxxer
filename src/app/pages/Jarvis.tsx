@@ -1128,8 +1128,27 @@ function getSessionToken() {
   return localStorage.getItem("slo_session_token") || "";
 }
 
+async function ensureSessionToken() {
+  const existing = getSessionToken();
+  if (existing) return existing;
+  const response = await fetch(withApiBase("/api/auth/demo-session"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      email: "jarvis-demo@polyjarvis.local",
+      display_name: "Jarvis Demo User",
+    }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data?.sessionToken) {
+    throw new Error(data?.error || "Unable to create demo session");
+  }
+  localStorage.setItem("slo_session_token", data.sessionToken);
+  return data.sessionToken as string;
+}
+
 async function apiJson<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const sessionToken = getSessionToken();
+  const sessionToken = await ensureSessionToken();
   const headers = new Headers(init.headers || {});
   if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   if (sessionToken) headers.set("x-session-token", sessionToken);
