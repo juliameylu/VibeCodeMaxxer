@@ -1,17 +1,37 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useNavigate, useSearchParams, useLocation } from "react-router";
 import { motion } from "motion/react";
 import Masonry, { ResponsiveMasonry } from "react-responsive-masonry";
-import { Search, MapPin, Pin, ArrowLeft, Car, Bus, DollarSign, Bike, ExternalLink, Sparkles, Zap, Ticket, RefreshCw, CalendarDays } from "lucide-react";
+import {
+  Search,
+  MapPin,
+  Pin,
+  ArrowLeft,
+  Car,
+  Bus,
+  DollarSign,
+  Bike,
+  ExternalLink,
+  Sparkles,
+  Zap,
+  Ticket,
+  RefreshCw,
+  CalendarDays,
+} from "lucide-react";
 import { places, getPlaceEmoji } from "../data/places";
 import { clsx } from "clsx";
 import { BottomNav } from "../components/BottomNav";
 import { PageHeader } from "../components/PageHeader";
 import { MustangIcon } from "../components/MustangIcon";
-import { getUserPreferences, getPreferenceScore, type UserPreferences } from "../utils/preferences";
+import {
+  getUserPreferences,
+  getPreferenceScore,
+  type UserPreferences,
+} from "../utils/preferences";
 import { useCampusEvents } from "../../lib/hooks/useCampusEvents";
 
-const fallbackImage = "https://images.unsplash.com/photo-1551449440-f29f2e53104b?auto=format&fit=crop&w=800";
+const fallbackImage =
+  "https://images.unsplash.com/photo-1551449440-f29f2e53104b?auto=format&fit=crop&w=800";
 
 const EVENT_RANGE_OPTIONS = [
   { label: "Today", value: "today" },
@@ -30,7 +50,8 @@ function formatEventWindow(startTime: string, endTime: string) {
 function scoreEventPreferenceMatch(event: any, prefs: UserPreferences) {
   if (!prefs.hasTrainingData) return 0;
 
-  const text = `${event?.title || ""} ${event?.category || ""} ${event?.description || ""}`.toLowerCase();
+  const text =
+    `${event?.title || ""} ${event?.category || ""} ${event?.description || ""}`.toLowerCase();
   let score = 0;
 
   prefs.likedPrompts.forEach((prompt) => {
@@ -56,19 +77,19 @@ export function Explore() {
   const [priceFilter, setPriceFilter] = useState<string | null>(null);
   const [sortByPreference, setSortByPreference] = useState(true);
   const userPrefs = useMemo(() => getUserPreferences(), []);
-  const initRef = useRef(false);
-  const { data: campusEventsData, isLoading: eventsLoading, error: eventsError } = useCampusEvents({
+  const {
+    data: campusEventsData,
+    isLoading: eventsLoading,
+    error: eventsError,
+  } = useCampusEvents({
     timeRange: eventRange,
     category: "all",
     query: "",
     refresh: String(eventsRefreshSeed),
   });
 
-  // Read category from search params or router state on mount only
+  // Initialize from URL/state once on mount, handle location state updates
   useEffect(() => {
-    if (initRef.current) return;
-    initRef.current = true;
-
     // Check router state first (from Preferences / Profile "Train Jarvis")
     const state = location.state as { category?: string } | null;
     if (state?.category) {
@@ -82,19 +103,26 @@ export function Explore() {
     const cat = searchParams.get("category");
     if (cat) setActiveCategory(cat);
 
-    const pinned = localStorage.getItem("pinnedEvents");
-    if (pinned) setPinnedIds(JSON.parse(pinned));
-  }, []); // run once on mount
+    // Load pinned events from localStorage (once)
+    try {
+      const pinned = localStorage.getItem("pinnedEvents");
+      if (pinned) setPinnedIds(JSON.parse(pinned));
+    } catch {
+      // Silently ignore localStorage errors
+    }
+  }, [location.state, searchParams]);
 
   const togglePin = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    const updated = pinnedIds.includes(id) ? pinnedIds.filter(l => l !== id) : [...pinnedIds, id];
+    const updated = pinnedIds.includes(id)
+      ? pinnedIds.filter((l) => l !== id)
+      : [...pinnedIds, id];
     setPinnedIds(updated);
     localStorage.setItem("pinnedEvents", JSON.stringify(updated));
   };
 
   const categories = useMemo(() => {
-    const cats = Array.from(new Set(places.map(p => p.category)));
+    const cats = Array.from(new Set(places.map((p) => p.category)));
     // Add "For You" category when training data exists
     const base = userPrefs.hasTrainingData
       ? ["All", "For You", "Inside", "Outside", "Budget", "Top rated"]
@@ -103,19 +131,42 @@ export function Explore() {
   }, [userPrefs.hasTrainingData]);
 
   const filteredPlaces = useMemo(() => {
-    let result = places.filter(place => {
+    let result = places.filter((place) => {
       let matchesCategory = false;
       switch (activeCategory) {
-        case "All": matchesCategory = true; break;
+        case "All":
+          matchesCategory = true;
+          break;
         case "For You":
           // Show places with high preference scores (7+)
           matchesCategory = getPreferenceScore(place, userPrefs) >= 7;
           break;
         case "Inside":
-          matchesCategory = ["Coffee Shops", "Study Spots", "Movies", "Bowling", "Museums", "Live Music", "Breweries", "Food & Treats", "Art", "Gym", "Escape Rooms", "Games & Arcades"].includes(place.category);
+          matchesCategory = [
+            "Coffee Shops",
+            "Study Spots",
+            "Movies",
+            "Bowling",
+            "Museums",
+            "Live Music",
+            "Breweries",
+            "Food & Treats",
+            "Art",
+            "Gym",
+            "Escape Rooms",
+            "Games & Arcades",
+          ].includes(place.category);
           break;
         case "Outside":
-          matchesCategory = ["Hikes", "Beaches", "Parks & Gardens", "Farmers Markets", "Viewpoints", "Water Sports", "Day Trips"].includes(place.category);
+          matchesCategory = [
+            "Hikes",
+            "Beaches",
+            "Parks & Gardens",
+            "Farmers Markets",
+            "Viewpoints",
+            "Water Sports",
+            "Day Trips",
+          ].includes(place.category);
           break;
         case "Budget":
           matchesCategory = place.price === "$" || place.price === "Free";
@@ -124,10 +175,15 @@ export function Explore() {
           matchesCategory = place.rating >= 4.8;
           break;
         default:
-          matchesCategory = place.category === activeCategory || place.tags.includes(activeCategory);
+          matchesCategory =
+            place.category === activeCategory ||
+            place.tags.includes(activeCategory);
       }
-      const matchesSearch = place.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        place.tags.some(tag => tag.toLowerCase().includes(searchQuery.toLowerCase()));
+      const matchesSearch =
+        place.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        place.tags.some((tag) =>
+          tag.toLowerCase().includes(searchQuery.toLowerCase()),
+        );
       const matchesPrice = !priceFilter || place.price === priceFilter;
       return matchesCategory && matchesSearch && matchesPrice;
     });
@@ -145,14 +201,17 @@ export function Explore() {
   }, [activeCategory, searchQuery, priceFilter, userPrefs, sortByPreference]);
 
   const filteredEvents = useMemo(() => {
-    const input = Array.isArray(campusEventsData?.items) ? campusEventsData.items : [];
+    const input = Array.isArray(campusEventsData?.items)
+      ? campusEventsData.items
+      : [];
     const mapped = input.map((event: any) => {
       const preferenceScore = scoreEventPreferenceMatch(event, userPrefs);
       return { ...event, preferenceScore };
     });
 
     const sorted = mapped.sort((a: any, b: any) => {
-      if (b.preferenceScore !== a.preferenceScore) return b.preferenceScore - a.preferenceScore;
+      if (b.preferenceScore !== a.preferenceScore)
+        return b.preferenceScore - a.preferenceScore;
       return new Date(a.startTime).getTime() - new Date(b.startTime).getTime();
     });
 
@@ -166,7 +225,10 @@ export function Explore() {
       {/* Header - fixed clash by using smaller text */}
       <div className="sticky top-0 z-20 bg-black/50 backdrop-blur-xl border-b border-white/8 px-4 pb-2 space-y-3">
         <div className="flex items-center gap-3">
-          <button onClick={() => navigate("/dashboard")} className="p-1 -ml-1 text-white/40">
+          <button
+            onClick={() => navigate("/dashboard")}
+            className="p-1 -ml-1 text-white/40"
+          >
             <ArrowLeft size={22} />
           </button>
           <div className="flex-1">
@@ -181,7 +243,10 @@ export function Explore() {
 
         {/* Search */}
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-white/25" size={16} />
+          <Search
+            className="absolute left-3 top-1/2 -translate-y-1/2 text-white/25"
+            size={16}
+          />
           <input
             type="text"
             placeholder="Search places..."
@@ -205,7 +270,7 @@ export function Explore() {
                     : "bg-[#F2E8CF] text-[#233216]"
                   : cat === "For You"
                     ? "bg-[#F2E8CF]/15 text-[#F2E8CF] border border-[#F2E8CF]/20"
-                    : "bg-white/10 text-white/40"
+                    : "bg-white/10 text-white/40",
               )}
             >
               {cat === "For You" && <Sparkles size={9} />}
@@ -219,8 +284,10 @@ export function Explore() {
       <div className="px-4 pt-3">
         {/* Price filter chips */}
         <div className="flex gap-1.5 mb-3 overflow-x-auto pb-1">
-          <p className="text-[9px] font-black text-white/25 uppercase tracking-widest self-center mr-1 flex-shrink-0">PRICE:</p>
-          {["Free", "$", "$$", "$$$"].map(p => (
+          <p className="text-[9px] font-black text-white/25 uppercase tracking-widest self-center mr-1 flex-shrink-0">
+            PRICE:
+          </p>
+          {["Free", "$", "$$", "$$$"].map((p) => (
             <button
               key={p}
               onClick={() => setPriceFilter(priceFilter === p ? null : p)}
@@ -228,7 +295,7 @@ export function Explore() {
                 "whitespace-nowrap px-2.5 py-1 rounded-full text-[9px] font-black tracking-wider transition-all",
                 priceFilter === p
                   ? "bg-[#F2E8CF] text-[#233216]"
-                  : "bg-white/8 text-white/35 border border-white/10"
+                  : "bg-white/8 text-white/35 border border-white/10",
               )}
             >
               {p}
@@ -246,7 +313,9 @@ export function Explore() {
 
         <div className="bg-white/10 backdrop-blur-sm border border-white/15 rounded-xl p-3 mb-3">
           <div className="flex items-center justify-between mb-2">
-            <p className="text-[10px] font-black text-[#F2E8CF] uppercase tracking-widest">EVENTS THAT MATCH YOU</p>
+            <p className="text-[10px] font-black text-[#F2E8CF] uppercase tracking-widest">
+              EVENTS THAT MATCH YOU
+            </p>
             <div className="flex items-center gap-1">
               {EVENT_RANGE_OPTIONS.map((option) => (
                 <button
@@ -271,25 +340,42 @@ export function Explore() {
             </div>
           </div>
           {eventsError ? (
-            <p className="text-xs text-red-200 py-1">Could not load events: {eventsError}</p>
+            <p className="text-xs text-red-200 py-1">
+              Could not load events: {eventsError}
+            </p>
           ) : eventsLoading ? (
             <p className="text-xs text-white/45 py-1">Loading live events...</p>
           ) : filteredEvents.length === 0 ? (
-            <p className="text-xs text-white/25 text-center py-1">No events found for this range.</p>
+            <p className="text-xs text-white/25 text-center py-1">
+              No events found for this range.
+            </p>
           ) : (
             <div className="space-y-1">
               {filteredEvents.map((event: any) => {
                 const source = String(event.source || "calpoly_now");
                 const isTicketmaster = source === "ticketmaster";
-                const actionLabel = isTicketmaster ? "BOOK TICKET" : "RSVP LINK";
-                const sourceLabel = isTicketmaster ? "Ticketmaster" : "Cal Poly NOW";
+                const actionLabel = isTicketmaster
+                  ? "BOOK TICKET"
+                  : "RSVP LINK";
+                const sourceLabel = isTicketmaster
+                  ? "Ticketmaster"
+                  : "Cal Poly NOW";
 
                 return (
-                  <div key={event.id} className="flex items-center gap-3 bg-white/6 rounded-lg px-3 py-2">
-                    <span className="text-lg">{isTicketmaster ? "🎟️" : "🎓"}</span>
+                  <div
+                    key={event.id}
+                    className="flex items-center gap-3 bg-white/6 rounded-lg px-3 py-2"
+                  >
+                    <span className="text-lg">
+                      {isTicketmaster ? "🎟️" : "🎓"}
+                    </span>
                     <div className="flex-1 min-w-0">
-                      <p className="text-xs font-bold text-white/80 truncate">{event.title}</p>
-                      <p className="text-[10px] text-white/35 truncate">{formatEventWindow(event.startTime, event.endTime)}</p>
+                      <p className="text-xs font-bold text-white/80 truncate">
+                        {event.title}
+                      </p>
+                      <p className="text-[10px] text-white/35 truncate">
+                        {formatEventWindow(event.startTime, event.endTime)}
+                      </p>
                       <p className="text-[10px] text-white/45">{sourceLabel}</p>
                     </div>
                     <a
@@ -298,7 +384,11 @@ export function Explore() {
                       rel="noopener noreferrer"
                       className="text-[9px] font-black text-[#F2E8CF] bg-[#F2E8CF]/15 border border-[#F2E8CF]/25 rounded-md px-2 py-1 whitespace-nowrap inline-flex items-center gap-1"
                     >
-                      {isTicketmaster ? <Ticket size={9} /> : <ExternalLink size={9} />}
+                      {isTicketmaster ? (
+                        <Ticket size={9} />
+                      ) : (
+                        <ExternalLink size={9} />
+                      )}
                       {actionLabel}
                     </a>
                   </div>
@@ -310,10 +400,17 @@ export function Explore() {
 
         <div className="bg-gradient-to-r from-[#F2E8CF]/8 to-[#64B5F6]/8 border border-[#F2E8CF]/12 rounded-xl p-3 mb-3">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 bg-[#F2E8CF]/15 rounded-xl flex items-center justify-center text-lg flex-shrink-0">🤖</div>
+            <div className="w-9 h-9 bg-[#F2E8CF]/15 rounded-xl flex items-center justify-center text-lg flex-shrink-0">
+              🤖
+            </div>
             <div className="flex-1">
-              <p className="text-[10px] font-black text-[#F2E8CF] uppercase tracking-widest">BOOKING BOT</p>
-              <p className="text-[10px] text-white/45">Auto-matches your availability + friends/jam overlap before booking.</p>
+              <p className="text-[10px] font-black text-[#F2E8CF] uppercase tracking-widest">
+                BOOKING BOT
+              </p>
+              <p className="text-[10px] text-white/45">
+                Auto-matches your availability + friends/jam overlap before
+                booking.
+              </p>
             </div>
             <button
               onClick={() => navigate("/restaurants")}
@@ -337,10 +434,11 @@ export function Explore() {
                 "flex items-center gap-1.5 text-[9px] font-bold px-2.5 py-1.5 rounded-lg border transition-all",
                 sortByPreference
                   ? "text-[#F2E8CF] bg-[#F2E8CF]/12 border-[#F2E8CF]/20"
-                  : "text-white/40 bg-white/5 border-white/10"
+                  : "text-white/40 bg-white/5 border-white/10",
               )}
             >
-              <Sparkles size={10} /> {sortByPreference ? "PERSONALIZED" : "DEFAULT ORDER"}
+              <Sparkles size={10} />{" "}
+              {sortByPreference ? "PERSONALIZED" : "DEFAULT ORDER"}
             </button>
           )}
           <a
@@ -365,28 +463,34 @@ export function Explore() {
       {/* Grid */}
       <div className="p-4">
         {/* Personalized banner */}
-        {userPrefs.hasTrainingData && sortByPreference && activeCategory !== "For You" && (
-          <div className="flex items-center gap-2 mb-3 bg-[#F2E8CF]/8 border border-[#F2E8CF]/15 rounded-lg px-3 py-2">
-            <Sparkles size={12} className="text-[#F2E8CF] flex-shrink-0" />
-            <div className="flex items-center gap-2 flex-wrap">
-              <p className="text-[10px] font-bold text-[#F2E8CF]/70">Sorted by your preferences</p>
-              <button
-                onClick={() => setActiveCategory("For You")}
-                className="flex items-center gap-1.5 text-[9px] font-bold tracking-wider uppercase text-[#F2E8CF] bg-[#F2E8CF]/12 px-2.5 py-1 rounded-lg border border-[#F2E8CF]/20 active:bg-[#F2E8CF]/20 transition-all"
-              >
-                <Sparkles size={10} />
-                See Top Picks
-              </button>
+        {userPrefs.hasTrainingData &&
+          sortByPreference &&
+          activeCategory !== "For You" && (
+            <div className="flex items-center gap-2 mb-3 bg-[#F2E8CF]/8 border border-[#F2E8CF]/15 rounded-lg px-3 py-2">
+              <Sparkles size={12} className="text-[#F2E8CF] flex-shrink-0" />
+              <div className="flex items-center gap-2 flex-wrap">
+                <p className="text-[10px] font-bold text-[#F2E8CF]/70">
+                  Sorted by your preferences
+                </p>
+                <button
+                  onClick={() => setActiveCategory("For You")}
+                  className="flex items-center gap-1.5 text-[9px] font-bold tracking-wider uppercase text-[#F2E8CF] bg-[#F2E8CF]/12 px-2.5 py-1 rounded-lg border border-[#F2E8CF]/20 active:bg-[#F2E8CF]/20 transition-all"
+                >
+                  <Sparkles size={10} />
+                  See Top Picks
+                </button>
+              </div>
             </div>
-          </div>
-        )}
+          )}
         <ResponsiveMasonry columnsCountBreakPoints={{ 350: 2, 750: 3 }}>
           <Masonry gutter="10px">
             {filteredPlaces.map((place) => {
               const isPinned = pinnedIds.includes(place.id);
               const needsCar = place.features?.includes("needs car");
               const hasBus = place.features?.includes("bus available");
-              const prefScore = userPrefs.hasTrainingData ? getPreferenceScore(place, userPrefs) : null;
+              const prefScore = userPrefs.hasTrainingData
+                ? getPreferenceScore(place, userPrefs)
+                : null;
 
               return (
                 <motion.div
@@ -394,12 +498,19 @@ export function Explore() {
                   initial={{ opacity: 0, y: 10 }}
                   whileInView={{ opacity: 1, y: 0 }}
                   viewport={{ once: true }}
-                  onClick={() => navigate(`/event/${place.id}`, { state: { from: "/explore" } })}
+                  onClick={() =>
+                    navigate(`/event/${place.id}`, {
+                      state: { from: "/explore" },
+                    })
+                  }
                   className="group relative bg-white/10 rounded-xl overflow-hidden border border-white/15 cursor-pointer active:scale-[0.97] transition-transform"
                 >
                   <div className="aspect-[4/3] overflow-hidden relative">
-                    <img src={place.image || fallbackImage} alt={place.name}
-                      className="w-full h-full object-cover" loading="lazy"
+                    <img
+                      src={place.image || fallbackImage}
+                      alt={place.name}
+                      className="w-full h-full object-cover"
+                      loading="lazy"
                     />
                     <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" />
 
@@ -408,17 +519,24 @@ export function Explore() {
                       onClick={(e) => togglePin(place.id, e)}
                       className={clsx(
                         "absolute top-2 right-2 p-1.5 rounded-full backdrop-blur-md transition-all",
-                        isPinned ? "bg-[#F2E8CF]/80 text-[#233216]" : "bg-black/40 text-white/70"
+                        isPinned
+                          ? "bg-[#F2E8CF]/80 text-[#233216]"
+                          : "bg-black/40 text-white/70",
                       )}
                     >
-                      <Pin size={12} fill={isPinned ? "currentColor" : "none"} />
+                      <Pin
+                        size={12}
+                        fill={isPinned ? "currentColor" : "none"}
+                      />
                     </button>
 
                     {/* Preference score badge */}
                     {prefScore !== null && prefScore >= 7 && (
                       <div className="absolute top-2 left-2 flex items-center gap-1 bg-[#F2E8CF]/90 text-[#233216] px-1.5 py-0.5 rounded-full backdrop-blur-md">
                         <Zap size={8} fill="currentColor" />
-                        <span className="text-[8px] font-black">{prefScore}/10</span>
+                        <span className="text-[8px] font-black">
+                          {prefScore}/10
+                        </span>
                       </div>
                     )}
 
@@ -434,14 +552,18 @@ export function Explore() {
 
                   <div className="px-2 py-1.5 flex items-center gap-1.5">
                     <span className="text-[9px] font-bold text-[#F2E8CF] flex items-center gap-0.5">
-                      <MustangIcon size={9} fill="currentColor" /> {place.rating}
+                      <MustangIcon size={9} fill="currentColor" />{" "}
+                      {place.rating}
                     </span>
                     <span className="text-[9px] text-white/20">·</span>
                     <span className="text-[9px] font-bold text-white/45 flex items-center gap-0.5">
-                      <DollarSign size={8} />{place.price}
+                      <DollarSign size={8} />
+                      {place.price}
                     </span>
                     <span className="text-[9px] text-white/20">·</span>
-                    <span className="text-[9px] font-bold text-white/35">{place.distance}</span>
+                    <span className="text-[9px] font-bold text-white/35">
+                      {place.distance}
+                    </span>
                     {/* Preference score (subtle) for medium scores */}
                     {prefScore !== null && prefScore >= 5 && prefScore < 7 && (
                       <>
@@ -457,15 +579,19 @@ export function Explore() {
                       </span>
                     )}
                     {hasBus && (
-                      <span className={`${needsCar ? "" : "ml-auto"} flex items-center gap-0.5 text-[8px] font-bold text-blue-300/70 bg-blue-300/10 px-1 py-0.5 rounded`}>
+                      <span
+                        className={`${needsCar ? "" : "ml-auto"} flex items-center gap-0.5 text-[8px] font-bold text-blue-300/70 bg-blue-300/10 px-1 py-0.5 rounded`}
+                      >
                         <Bus size={8} /> BUS
                       </span>
                     )}
-                    {!needsCar && !hasBus && place.features?.includes("walkable") && (
-                      <span className="ml-auto flex items-center gap-0.5 text-[8px] font-bold text-green-300/70 bg-green-300/10 px-1 py-0.5 rounded">
-                        🚶 WALK
-                      </span>
-                    )}
+                    {!needsCar &&
+                      !hasBus &&
+                      place.features?.includes("walkable") && (
+                        <span className="ml-auto flex items-center gap-0.5 text-[8px] font-bold text-green-300/70 bg-green-300/10 px-1 py-0.5 rounded">
+                          🚶 WALK
+                        </span>
+                      )}
                     {place.features?.includes("bike friendly") && (
                       <span className="flex items-center gap-0.5 text-[8px] font-bold text-purple-300/70 bg-purple-300/10 px-1 py-0.5 rounded">
                         <Bike size={8} /> BIKE
@@ -479,7 +605,9 @@ export function Explore() {
         </ResponsiveMasonry>
 
         {filteredPlaces.length === 0 && (
-          <div className="text-center py-16 text-white/25">No places found.</div>
+          <div className="text-center py-16 text-white/25">
+            No places found.
+          </div>
         )}
       </div>
 
