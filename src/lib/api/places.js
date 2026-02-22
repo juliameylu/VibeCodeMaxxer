@@ -1,10 +1,30 @@
 import fixtures from "../../mocks/fixtures/places.json";
+import { DEMO_PLACE_SEMANTIC_META } from "../../mocks/fixtures/placeSemanticMeta";
+import { matchPlaceToPreferences } from "../recommendation/preferenceMatching";
 import { httpGetJson } from "./http";
 
 const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === "true";
 
 function normalizeString(value) {
   return String(value || "").toLowerCase();
+}
+
+function enrichDemoPlace(place) {
+  const meta = DEMO_PLACE_SEMANTIC_META[place?.id];
+  if (!meta) return place;
+  return { ...place, ...meta };
+}
+
+function placeSearchText(place) {
+  const fields = [
+    place?.name,
+    place?.address,
+    ...(Array.isArray(place?.cuisine_tags) ? place.cuisine_tags : []),
+    ...(Array.isArray(place?.menu_tags) ? place.menu_tags : []),
+    ...(Array.isArray(place?.attribute_tags) ? place.attribute_tags : []),
+    ...(Array.isArray(place?.review_snippets) ? place.review_snippets : []),
+  ];
+  return normalizeString(fields.filter(Boolean).join(" "));
 }
 
 export async function searchPlaces(params = {}) {
@@ -20,17 +40,15 @@ export async function searchPlaces(params = {}) {
       pageSize = 8,
     } = params;
 
-    let results = fixtures.filter((place) => {
+    let results = fixtures.map(enrichDemoPlace).filter((place) => {
       const categoryOk = category === "all" || place.category === category;
       const priceOk = price === "all" || place.price === price;
       const openOk = !openNow || place.isOpenNow;
 
-      const queryText = `${place.name} ${place.address}`.toLowerCase();
+      const queryText = placeSearchText(place);
       const queryOk = !query || queryText.includes(normalizeString(query));
 
-      const prefOk =
-        preferences.length === 0 ||
-        preferences.some((pref) => queryText.includes(normalizeString(pref)));
+      const prefOk = matchPlaceToPreferences(place, preferences);
 
       return categoryOk && priceOk && openOk && queryOk && prefOk;
     });

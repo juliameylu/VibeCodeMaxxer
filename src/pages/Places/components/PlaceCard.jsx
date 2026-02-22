@@ -5,7 +5,30 @@ function formatDistance(distanceMeters) {
   return `${(distanceMeters / 1000).toFixed(1)} km`;
 }
 
-export default function PlaceCard({ place, liked = false, onView, onToggleLike, onDismiss }) {
+function buildPlaceUrl(place) {
+  const raw = String(place?.url || "").trim();
+  if (raw && raw !== "https://www.yelp.com" && raw !== "https://yelp.com") {
+    return raw;
+  }
+
+  const search = new URLSearchParams({
+    find_desc: place?.name || "restaurant",
+    find_loc: place?.address || "San Luis Obispo, CA",
+  });
+
+  return `https://www.yelp.com/search?${search.toString()}`;
+}
+
+export default function PlaceCard({
+  place,
+  liked = false,
+  onView,
+  onToggleLike,
+  onDismiss,
+  onMockReserve,
+}) {
+  const placeUrl = buildPlaceUrl(place);
+
   return (
     <Card className="p-0 overflow-hidden">
       <img
@@ -32,7 +55,7 @@ export default function PlaceCard({ place, liked = false, onView, onToggleLike, 
         </div>
 
         <a
-          href={place.url}
+          href={placeUrl}
           target="_blank"
           rel="noreferrer"
           onClick={() => onView?.(place)}
@@ -41,6 +64,9 @@ export default function PlaceCard({ place, liked = false, onView, onToggleLike, 
           View on Yelp
         </a>
         <div className="mt-2 flex flex-wrap gap-2">
+          <button onClick={() => onMockReserve?.(place)} className="chip chip-active text-xs">
+            Mock Reserve
+          </button>
           <button onClick={() => onToggleLike?.(place)} className={`chip text-xs ${liked ? "chip-active" : "chip-idle"}`}>
             {liked ? "Liked" : "Like"}
           </button>

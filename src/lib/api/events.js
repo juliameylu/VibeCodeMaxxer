@@ -56,5 +56,5 @@ export async function fetchCampusEvents(params = {}) {
     query: params.query || "",
   });
 
-  return httpGetJson(`/api/events?${search.toString()}`);
+  return httpGetJson(`/api/events?${search.toString()}`, { cache: "no-store" });
 }
