@@ -23,6 +23,8 @@ const store = {
   jamMembers: [],
   notifications: [],
   studyTasks: [],
+  availabilities: [],
+  reservations: [],
   aiActionLogs: [],
   pendingActions: new Map(),
   eventsCatalog: [
@@ -103,6 +105,56 @@ const store = {
     }
   ]
 };
+
+function toIsoOrNull(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function overlaps(aStart, aEnd, bStart, bEnd) {
+  return new Date(aStart).getTime() < new Date(bEnd).getTime() && new Date(bStart).getTime() < new Date(aEnd).getTime();
+}
+
+function getUserAvailability(userId) {
+  return store.availabilities
+    .filter((row) => row.user_id === userId)
+    .sort((a, b) => new Date(a.start_at).getTime() - new Date(b.start_at).getTime());
+}
+
+function findOverlapSlots(userIds = []) {
+  if (!userIds.length) return [];
+  const [firstUserId, ...rest] = userIds;
+  const first = getUserAvailability(firstUserId);
+  if (!first.length) return [];
+
+  return first.filter((slot) =>
+    rest.every((userId) =>
+      getUserAvailability(userId).some((candidate) => overlaps(slot.start_at, slot.end_at, candidate.start_at, candidate.end_at))
+    )
+  );
+}
+
+function bookingOptions({ userId, item, includeGroup = false }) {
+  const participants = includeGroup
+    ? [...new Set([userId, ...store.jamMembers.filter((member) => member.user_id !== userId).slice(0, 2).map((row) => row.user_id)])]
+    : [userId];
+  const overlapSlots = findOverlapSlots(participants).slice(0, 5);
+  const fallbackSlots = [1, 3, 5].map((offsetHours) => {
+    const start = new Date(Date.now() + offsetHours * 60 * 60 * 1000);
+    const end = new Date(start.getTime() + 60 * 60 * 1000);
+    return {
+      id: randomUUID(),
+      start_at: start.toISOString(),
+      end_at: end.toISOString(),
+      source: "suggested"
+    };
+  });
+
+  const slots = overlapSlots.length ? overlapSlots : fallbackSlots;
+  const category = String(item?.category || "").toLowerCase();
+  const provider = category === "concerts" ? "ticketmaster" : category === "campus" ? "cal_poly_now" : "yelp";
+  return { slots, provider, participants };
+}
 
 function createNotification({ userId, type, title, message, entityType = null, entityId = null }) {
   const notification = {
@@ -598,6 +650,41 @@ export function registerPlannerApi(app) {
     });
   });
 
+  app.post("/api/auth/google/mock", (req, res) => {
+    const googleEmail = normalizeEmail(req.body?.email || "student@calpoly.edu");
+    let user = [...store.users.values()].find((candidate) => candidate.email === googleEmail);
+
+    if (!user) {
+      const userId = randomUUID();
+      user = {
+        id: userId,
+        email: googleEmail,
+        display_name: String(req.body?.displayName || "Google User").trim(),
+        cal_poly_email: googleEmail.endsWith("@calpoly.edu") ? googleEmail : "",
+        onboarding_complete: false,
+        created_at: NOW().toISOString(),
+        password: `google-oauth-${randomUUID()}`
+      };
+      store.users.set(userId, user);
+      getOrInitPreferences(userId);
+      getOrInitConnections(userId);
+    }
+
+    const sessionToken = randomUUID();
+    store.sessions.set(sessionToken, user.id);
+
+    res.json({
+      sessionToken,
+      provider: "google_mock",
+      user: {
+        id: user.id,
+        email: user.email,
+        display_name: user.display_name,
+        onboarding_complete: user.onboarding_complete
+      }
+    });
+  });
+
   app.post("/api/auth/session-bootstrap", (req, res) => {
     const token = req.header("x-session-token") || req.body?.sessionToken;
     if (!token) {
@@ -669,6 +756,47 @@ export function registerPlannerApi(app) {
     store.connections.set(auth.userId, connections);
 
     res.json({ connected: true, provider: "google", connections });
+  });
+
+  app.get("/api/availability", (req, res) => {
+    const auth = requireSession(req, res);
+    if (!auth) return;
+    res.json({ availabilities: getUserAvailability(auth.userId) });
+  });
+
+  app.post("/api/availability", (req, res) => {
+    const auth = requireSession(req, res);
+    if (!auth) return;
+
+    const startAt = toIsoOrNull(req.body?.start_at);
+    const endAt = toIsoOrNull(req.body?.end_at);
+    if (!startAt || !endAt || new Date(endAt).getTime() <= new Date(startAt).getTime()) {
+      res.status(400).json({ error: "Valid start_at and end_at are required" });
+      return;
+    }
+
+    const slot = {
+      id: randomUUID(),
+      user_id: auth.userId,
+      start_at: startAt,
+      end_at: endAt,
+      source: String(req.body?.source || "manual"),
+      created_at: NOW().toISOString()
+    };
+    store.availabilities.push(slot);
+    res.json({ availability: slot, availabilities: getUserAvailability(auth.userId) });
+  });
+
+  app.get("/api/availability/overlap", (req, res) => {
+    const auth = requireSession(req, res);
+    if (!auth) return;
+    const withIds = String(req.query.with || "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    const userIds = [...new Set([auth.userId, ...withIds])];
+    const slots = findOverlapSlots(userIds).slice(0, 8);
+    res.json({ user_ids: userIds, overlap_slots: slots });
   });
 
   app.post("/api/calendar/ics/import", (req, res) => {
@@ -1550,15 +1678,63 @@ export function registerPlannerApi(app) {
     if (!auth) return;
 
     const itemId = req.body?.item_id || "event-brew-quiet";
-    const item = store.eventsCatalog.find((candidate) => candidate.id === itemId);
+    const includeGroup = Boolean(req.body?.include_group_availability);
+    const item = store.eventsCatalog.find((candidate) => candidate.id === itemId) || store.eventsCatalog[0];
+    const { slots, provider, participants } = bookingOptions({ userId: auth.userId, item, includeGroup });
+
     res.json({
       item,
+      provider,
+      participants,
+      suggested_slots: slots,
       providers: [
-        { name: "OpenTable", deep_link: "https://www.opentable.com/" },
+        { name: "Yelp Reservations", deep_link: "https://www.yelp.com/reservations" },
+        { name: "Ticketmaster", deep_link: "https://www.ticketmaster.com/" },
+        { name: "Cal Poly NOW", deep_link: "https://now.calpoly.edu/" },
         { name: "Google Maps", deep_link: "https://maps.google.com/" }
       ],
       requires_external_completion: true
     });
+  });
+
+  app.post("/api/booking/confirm", (req, res) => {
+    const auth = requireSession(req, res);
+    if (!auth) return;
+
+    const itemId = String(req.body?.item_id || "event-brew-quiet");
+    const item = store.eventsCatalog.find((candidate) => candidate.id === itemId);
+    if (!item) {
+      res.status(404).json({ error: "Item not found" });
+      return;
+    }
+
+    const slotStart = toIsoOrNull(req.body?.slot_start_at);
+    const slotEnd = toIsoOrNull(req.body?.slot_end_at);
+    const notes = String(req.body?.notes || "").trim().slice(0, 500);
+    const includeGroup = Boolean(req.body?.include_group_availability);
+    const { provider, participants } = bookingOptions({ userId: auth.userId, item, includeGroup });
+
+    const reservation = {
+      id: randomUUID(),
+      user_id: auth.userId,
+      item_id: item.id,
+      item_title: item.title,
+      provider,
+      notes,
+      slot_start_at: slotStart || NOW().toISOString(),
+      slot_end_at: slotEnd || new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      participants,
+      created_at: NOW().toISOString(),
+      deep_link:
+        provider === "ticketmaster"
+          ? "https://www.ticketmaster.com/"
+          : provider === "cal_poly_now"
+            ? "https://now.calpoly.edu/"
+            : "https://www.yelp.com/reservations"
+    };
+
+    store.reservations.push(reservation);
+    res.json({ confirmed: true, reservation });
   });
 
   app.post("/api/payments/applepay/merchant-session", (req, res) => {
