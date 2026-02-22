@@ -1,5 +1,5 @@
 import { useParams, Link } from 'react-router';
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { ArrowLeft, MapPin, Globe, Calendar, Camera, X, Upload, Car, Bus, Footprints, ExternalLink } from 'lucide-react';
 import { places } from '../data/places';
@@ -32,10 +32,19 @@ export function EventDetails() {
   const place = places.find((p) => p.id === id);
   const [isBookingOpen, setIsBookingOpen] = useState(false);
   const [bookingDate, setBookingDate] = useState("");
+  const [bookingNotes, setBookingNotes] = useState("");
+  const [bookingSlots, setBookingSlots] = useState<Array<{ id: string; start_at: string; end_at: string }>>([]);
+  const [selectedSlotId, setSelectedSlotId] = useState("");
+  const [includeGroupAvailability, setIncludeGroupAvailability] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [uploadedPhoto, setUploadedPhoto] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!isBookingOpen) return;
+    loadBookingOptions();
+  }, [isBookingOpen, includeGroupAvailability]);
 
   if (!place) {
     return <div className="p-10 text-center text-foreground">Place not found</div>;
@@ -46,33 +55,55 @@ export function EventDetails() {
 
   const handleBooking = async () => {
     setIsProcessing(true);
-    // Simulate Apple Pay delay
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    
-    // Call backend
+
     try {
-      const res = await fetch(`https://${projectId}.supabase.co/functions/v1/make-server-6c4f77a7/book`, {
+      const selectedSlot = bookingSlots.find((slot) => slot.id === selectedSlotId);
+      const res = await fetch('/api/booking/confirm', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${publicAnonKey}`
+          'x-session-token': localStorage.getItem('slo_session_token') || ''
         },
         body: JSON.stringify({
-          placeId: place.id,
-          placeName: place.name,
-          date: bookingDate || new Date().toISOString(),
-          userId: 'user-demo-123'
+          item_id: `event-${place.id}`,
+          notes: bookingNotes,
+          include_group_availability: includeGroupAvailability,
+          slot_start_at: selectedSlot?.start_at || bookingDate || new Date().toISOString(),
+          slot_end_at: selectedSlot?.end_at || new Date(Date.now() + 60 * 60 * 1000).toISOString()
         })
       });
       
       if (!res.ok) throw new Error('Booking failed');
       
-      toast.success("Booking confirmed with Apple Pay!");
+      toast.success("Booking confirmed!");
       setIsBookingOpen(false);
     } catch (e) {
       toast.error("Failed to book. Try again.");
     } finally {
       setIsProcessing(false);
+    }
+  };
+
+  const loadBookingOptions = async () => {
+    try {
+      const res = await fetch('/api/booking/intent', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-session-token': localStorage.getItem('slo_session_token') || ''
+        },
+        body: JSON.stringify({
+          item_id: `event-${place.id}`,
+          include_group_availability: includeGroupAvailability
+        })
+      });
+      const data = await res.json();
+      const slots = Array.isArray(data?.suggested_slots) ? data.suggested_slots : [];
+      setBookingSlots(slots);
+      setSelectedSlotId(slots[0]?.id || '');
+    } catch {
+      setBookingSlots([]);
+      setSelectedSlotId('');
     }
   };
 
@@ -307,6 +338,41 @@ export function EventDetails() {
                   />
                 </div>
 
+                <div>
+                  <label className="block text-xs font-bold text-white/40 mb-1 uppercase tracking-wider">Suggested Time Slot</label>
+                  <select
+                    value={selectedSlotId}
+                    onChange={(e) => setSelectedSlotId(e.target.value)}
+                    className="w-full bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-[#8BC34A]/40"
+                  >
+                    <option value="">Use selected date</option>
+                    {bookingSlots.map((slot) => (
+                      <option key={slot.id} value={slot.id}>
+                        {new Date(slot.start_at).toLocaleString()} - {new Date(slot.end_at).toLocaleTimeString()}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <label className="flex items-center gap-2 text-xs text-white/70">
+                  <input
+                    type="checkbox"
+                    checked={includeGroupAvailability}
+                    onChange={(e) => setIncludeGroupAvailability(e.target.checked)}
+                  />
+                  Use group (jam) availability
+                </label>
+
+                <div>
+                  <label className="block text-xs font-bold text-white/40 mb-1 uppercase tracking-wider">Reservation Notes</label>
+                  <textarea
+                    value={bookingNotes}
+                    onChange={(e) => setBookingNotes(e.target.value)}
+                    placeholder="Any dietary, seating, or accessibility notes"
+                    className="w-full bg-white/5 border border-white/10 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-[#8BC34A]/40"
+                  />
+                </div>
+
                 <div className="bg-white/5 p-4 rounded-xl space-y-2 border border-white/10">
                   <div className="flex justify-between text-sm">
                     <span className="text-white/40">Item</span>
@@ -331,9 +397,9 @@ export function EventDetails() {
                     <span className="animate-pulse">Processing...</span>
                   ) : (
                     <>
-                      <span className="font-bold tracking-tight">Pay with</span>
+                      <span className="font-bold tracking-tight">Book now</span>
                       <span className="flex items-center gap-0.5 font-bold">
-                        Pay
+                        with availability
                       </span>
                     </>
                   )}
