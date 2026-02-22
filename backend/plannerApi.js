@@ -27,6 +27,7 @@ const store = {
   reservations: [],
   aiActionLogs: [],
   pendingActions: new Map(),
+  reservationIntents: [],
   eventsCatalog: [
     {
       id: "event-brew-quiet",
@@ -106,54 +107,28 @@ const store = {
   ]
 };
 
-function toIsoOrNull(value) {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+const VALID_RESERVATION_TRANSITIONS = {
+  pending: new Set(["confirmed", "cancelled"]),
+  confirmed: new Set(),
+  cancelled: new Set()
+};
+
+function normalizePartySize(value) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < 1 || parsed > 20) return null;
+  return parsed;
 }
 
-function overlaps(aStart, aEnd, bStart, bEnd) {
-  return new Date(aStart).getTime() < new Date(bEnd).getTime() && new Date(bStart).getTime() < new Date(aEnd).getTime();
+function findReservationIntentById(id) {
+  return store.reservationIntents.find((intent) => intent.id === id) || null;
 }
 
-function getUserAvailability(userId) {
-  return store.availabilities
-    .filter((row) => row.user_id === userId)
-    .sort((a, b) => new Date(a.start_at).getTime() - new Date(b.start_at).getTime());
-}
-
-function findOverlapSlots(userIds = []) {
-  if (!userIds.length) return [];
-  const [firstUserId, ...rest] = userIds;
-  const first = getUserAvailability(firstUserId);
-  if (!first.length) return [];
-
-  return first.filter((slot) =>
-    rest.every((userId) =>
-      getUserAvailability(userId).some((candidate) => overlaps(slot.start_at, slot.end_at, candidate.start_at, candidate.end_at))
-    )
+function findReservationIntentByIdempotency({ userId, idempotencyKey }) {
+  return (
+    store.reservationIntents.find(
+      (intent) => intent.userId === userId && intent.idempotencyKey === idempotencyKey
+    ) || null
   );
-}
-
-function bookingOptions({ userId, item, includeGroup = false }) {
-  const participants = includeGroup
-    ? [...new Set([userId, ...store.jamMembers.filter((member) => member.user_id !== userId).slice(0, 2).map((row) => row.user_id)])]
-    : [userId];
-  const overlapSlots = findOverlapSlots(participants).slice(0, 5);
-  const fallbackSlots = [1, 3, 5].map((offsetHours) => {
-    const start = new Date(Date.now() + offsetHours * 60 * 60 * 1000);
-    const end = new Date(start.getTime() + 60 * 60 * 1000);
-    return {
-      id: randomUUID(),
-      start_at: start.toISOString(),
-      end_at: end.toISOString(),
-      source: "suggested"
-    };
-  });
-
-  const slots = overlapSlots.length ? overlapSlots : fallbackSlots;
-  const category = String(item?.category || "").toLowerCase();
-  const provider = category === "concerts" ? "ticketmaster" : category === "campus" ? "cal_poly_now" : "yelp";
-  return { slots, provider, participants };
 }
 
 function createNotification({ userId, type, title, message, entityType = null, entityId = null }) {
@@ -1697,44 +1672,86 @@ export function registerPlannerApi(app) {
     });
   });
 
-  app.post("/api/booking/confirm", (req, res) => {
+  app.post("/api/reservation-intents", (req, res) => {
     const auth = requireSession(req, res);
     if (!auth) return;
 
-    const itemId = String(req.body?.item_id || "event-brew-quiet");
-    const item = store.eventsCatalog.find((candidate) => candidate.id === itemId);
-    if (!item) {
-      res.status(404).json({ error: "Item not found" });
+    const idempotencyKey = String(req.header("Idempotency-Key") || "").trim();
+    if (!idempotencyKey) {
+      res.status(400).json({ error: "Idempotency-Key header is required" });
       return;
     }
 
-    const slotStart = toIsoOrNull(req.body?.slot_start_at);
-    const slotEnd = toIsoOrNull(req.body?.slot_end_at);
-    const notes = String(req.body?.notes || "").trim().slice(0, 500);
-    const includeGroup = Boolean(req.body?.include_group_availability);
-    const { provider, participants } = bookingOptions({ userId: auth.userId, item, includeGroup });
+    const venueId = String(req.body?.venueId || "").trim();
+    const datetime = String(req.body?.datetime || "").trim();
+    const partySize = normalizePartySize(req.body?.partySize);
 
-    const reservation = {
+    if (!venueId || !datetime || !partySize) {
+      res.status(400).json({ error: "venueId, datetime, and valid partySize are required" });
+      return;
+    }
+
+    const existing = findReservationIntentByIdempotency({ userId: auth.userId, idempotencyKey });
+    if (existing) {
+      res.json({ intent: existing, idempotent: true });
+      return;
+    }
+
+    const intent = {
       id: randomUUID(),
-      user_id: auth.userId,
-      item_id: item.id,
-      item_title: item.title,
-      provider,
-      notes,
-      slot_start_at: slotStart || NOW().toISOString(),
-      slot_end_at: slotEnd || new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-      participants,
-      created_at: NOW().toISOString(),
-      deep_link:
-        provider === "ticketmaster"
-          ? "https://www.ticketmaster.com/"
-          : provider === "cal_poly_now"
-            ? "https://now.calpoly.edu/"
-            : "https://www.yelp.com/reservations"
+      userId: auth.userId,
+      venueId,
+      datetime,
+      partySize,
+      status: "pending",
+      idempotencyKey,
+      createdAt: NOW().toISOString()
     };
+    store.reservationIntents.push(intent);
 
-    store.reservations.push(reservation);
-    res.json({ confirmed: true, reservation });
+    setTimeout(() => {
+      const latest = findReservationIntentById(intent.id);
+      if (latest && latest.status === "pending") {
+        latest.status = "confirmed";
+      }
+    }, 1200);
+
+    res.status(201).json({ intent, idempotent: false });
+  });
+
+  app.get("/api/reservation-intents/:id", (req, res) => {
+    const auth = requireSession(req, res);
+    if (!auth) return;
+
+    const intent = findReservationIntentById(req.params.id);
+    if (!intent || intent.userId !== auth.userId) {
+      res.status(404).json({ error: "Reservation intent not found" });
+      return;
+    }
+
+    res.json({ intent });
+  });
+
+  app.post("/api/reservation-intents/:id/status", (req, res) => {
+    const auth = requireSession(req, res);
+    if (!auth) return;
+
+    const intent = findReservationIntentById(req.params.id);
+    if (!intent || intent.userId !== auth.userId) {
+      res.status(404).json({ error: "Reservation intent not found" });
+      return;
+    }
+
+    const nextStatus = String(req.body?.status || "").trim();
+    if (!VALID_RESERVATION_TRANSITIONS[intent.status]?.has(nextStatus)) {
+      res.status(400).json({
+        error: `Invalid status transition from ${intent.status} to ${nextStatus || "(empty)"}`
+      });
+      return;
+    }
+
+    intent.status = nextStatus;
+    res.json({ intent });
   });
 
   app.post("/api/payments/applepay/merchant-session", (req, res) => {

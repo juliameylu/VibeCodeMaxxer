@@ -1199,15 +1199,20 @@ export function Dashboard() {
                   </div>
                 </div>
 
-                {/* Reservation Bot Placeholder */}
+                {/* Reservation Bot */}
                 <div className="mt-4 bg-gradient-to-r from-[#F2E8CF]/8 to-[#64B5F6]/8 border border-[#F2E8CF]/12 rounded-xl p-4 mb-4">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 bg-[#F2E8CF]/15 rounded-xl flex items-center justify-center text-lg flex-shrink-0">🤖</div>
                     <div className="flex-1">
                       <p className="text-xs font-black text-[#F2E8CF] uppercase tracking-wider">RESERVATION BOT</p>
-                      <p className="text-[10px] text-white/40 mt-0.5">Auto-book restaurants & activities</p>
+                      <p className="text-[10px] text-white/40 mt-0.5">Create mock reservation intents and auto-confirm them.</p>
                     </div>
-                    <span className="text-[8px] font-black bg-[#F2E8CF]/15 text-[#F2E8CF] px-2 py-1 rounded-full">COMING SOON</span>
+                    <button
+                      onClick={() => navigate('/event/event-brew-quiet')}
+                      className="text-[9px] font-black bg-[#F2E8CF]/20 text-[#F2E8CF] px-2 py-1 rounded-full border border-[#F2E8CF]/25"
+                    >
+                      TRY NOW
+                    </button>
                   </div>
                 </div>
               </>

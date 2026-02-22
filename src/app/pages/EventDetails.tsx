@@ -6,6 +6,7 @@ import { places } from '../data/places';
 import { projectId, publicAnonKey } from '/utils/supabase/info';
 import { toast } from "sonner";
 import { clsx } from 'clsx';
+import { createReservationIntent, getReservationIntent } from '../../lib/api/reservations';
 
 // Reusing the image mapping logic
 const categoryImages: Record<string, string> = {
@@ -37,6 +38,7 @@ export function EventDetails() {
   const [selectedSlotId, setSelectedSlotId] = useState("");
   const [includeGroupAvailability, setIncludeGroupAvailability] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [reservationStatus, setReservationStatus] = useState<string | null>(null);
   const [uploadedPhoto, setUploadedPhoto] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -57,28 +59,36 @@ export function EventDetails() {
     setIsProcessing(true);
 
     try {
-      const selectedSlot = bookingSlots.find((slot) => slot.id === selectedSlotId);
-      const res = await fetch('/api/booking/confirm', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-session-token': localStorage.getItem('slo_session_token') || ''
-        },
-        body: JSON.stringify({
-          item_id: `event-${place.id}`,
-          notes: bookingNotes,
-          include_group_availability: includeGroupAvailability,
-          slot_start_at: selectedSlot?.start_at || bookingDate || new Date().toISOString(),
-          slot_end_at: selectedSlot?.end_at || new Date(Date.now() + 60 * 60 * 1000).toISOString()
-        })
+      const datetime = bookingDate
+        ? new Date(`${bookingDate}T19:00:00`).toISOString()
+        : new Date(Date.now() + 1000 * 60 * 60 * 24).toISOString();
+      const idempotencyKey = `${place.id}-${bookingDate || "next-day"}-party-2`;
+
+      const created = await createReservationIntent({
+        venueId: place.id,
+        datetime,
+        partySize: 2,
+        idempotencyKey
       });
-      
-      if (!res.ok) throw new Error('Booking failed');
-      
-      toast.success("Booking confirmed!");
+
+      setReservationStatus(created.intent.status);
+      if (created.intent.status === "pending") {
+        toast.message("Reservation requested. Confirming now...");
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 1400));
+      const latest = await getReservationIntent(created.intent.id);
+      setReservationStatus(latest.intent.status);
+
+      if (latest.intent.status === "confirmed") {
+        toast.success(`Reservation confirmed at ${place.name}!`);
+      } else {
+        toast.message(`Reservation status: ${latest.intent.status}`);
+      }
+
       setIsBookingOpen(false);
     } catch (e) {
-      toast.error("Failed to book. Try again.");
+      toast.error("Failed to create mock reservation. Try again.");
     } finally {
       setIsProcessing(false);
     }
@@ -387,6 +397,12 @@ export function EventDetails() {
                     <span>$0.00</span>
                   </div>
                 </div>
+
+                {reservationStatus && (
+                  <div className="text-xs text-white/60 bg-white/5 border border-white/10 rounded-lg px-3 py-2">
+                    Mock reservation status: <span className="font-bold text-[#F2E8CF] uppercase">{reservationStatus}</span>
+                  </div>
+                )}
 
                 <button
                   onClick={handleBooking}
