@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { useNavigate, Link, useSearchParams } from "react-router";
+import { useState } from "react";
+import { useNavigate, Link } from "react-router";
 import { motion, AnimatePresence } from "motion/react";
 import { Check, X, Plus, Users, Clock, ArrowRight, AlertCircle } from "lucide-react";
 import { toast } from "sonner";
@@ -28,15 +28,9 @@ const weekAssignments: Assignment[] = [
 
 export function Deadlines() {
   const navigate = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams();
   const [today, setToday] = useState(todayAssignments);
   const [week, setWeek] = useState(weekAssignments);
   const [showAddModal, setShowAddModal] = useState(false);
-  const [showCanvasModal, setShowCanvasModal] = useState(false);
-  const [canvasToken, setCanvasToken] = useState("");
-  const [canvasStatus, setCanvasStatus] = useState("");
-  const [canvasError, setCanvasError] = useState("");
-  const [showCanvasHowTo, setShowCanvasHowTo] = useState(false);
   const [newTask, setNewTask] = useState({ name: "", course: "", time: "" });
 
   const markDone = (id: string, isToday: boolean) => {
@@ -72,56 +66,19 @@ export function Deadlines() {
     toast.success("Task added!");
   };
 
-  useEffect(() => {
-    if (searchParams.get("canvas") === "1") {
-      setShowCanvasModal(true);
-      const next = new URLSearchParams(searchParams);
-      next.delete("canvas");
-      setSearchParams(next, { replace: true });
-    }
-  }, [searchParams, setSearchParams]);
-
-  const connectCanvas = async () => {
-    setCanvasError("");
-    setCanvasStatus("");
-    const token = canvasToken.trim();
-    if (!token) {
-      setCanvasError("Paste a Canvas token first.");
-      return;
-    }
-
-    try {
-      const response = await fetch("/api/canvas/connect/token", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token }),
-      });
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        throw new Error(data?.error || "Could not connect Canvas.");
-      }
-      localStorage.setItem("canvas_token", token);
-      setCanvasStatus("Canvas connected successfully.");
-      setCanvasToken("");
-      toast.success("Canvas connected");
-    } catch (error) {
-      setCanvasError(error instanceof Error ? error.message : "Could not connect Canvas.");
-    }
-  };
-
   const allTodayDone = today.length > 0 && today.every(a => a.done);
   const todayRemaining = today.filter(a => !a.done).length;
 
   return (
-    <div className="min-h-full bg-transparent text-white pb-24">
+    <div className="min-h-[100dvh] bg-transparent text-white pb-24">
       <PageHeader />
 
       {/* Header */}
       <div className="bg-gradient-to-b from-[#8BC34A]/10 to-transparent px-5 pb-8">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <p className="text-[#8BC34A] text-[10px] font-black uppercase tracking-widest">LOCK-IN MODE</p>
-            <h1 className="text-2xl font-black text-white tracking-tight uppercase">DEADLINES</h1>
+            <p className="text-[#8BC34A] text-[10px] font-semibold capitalize tracking-wider">Lock-in Mode</p>
+            <h1 className="text-2xl font-bold text-white tracking-tight capitalize">Deadlines</h1>
           </div>
           <button
             onClick={() => setShowAddModal(true)}
@@ -143,25 +100,18 @@ export function Deadlines() {
         <p className="text-white/25 text-xs mt-2 font-bold">
           {todayRemaining === 0 ? "ALL DONE TODAY!" : `${todayRemaining} REMAINING TODAY`}
         </p>
-
-        <button
-          onClick={() => setShowCanvasModal(true)}
-          className="mt-3 w-full py-2.5 rounded-xl border border-[#8BC34A]/25 bg-[#8BC34A]/10 text-[10px] font-black uppercase tracking-widest text-[#8BC34A] active:scale-[0.98] transition-transform"
-        >
-          Link Canvas Account
-        </button>
       </div>
 
       <div className="px-5 -mt-2 space-y-6">
         {/* TODAY */}
         <div>
-          <h2 className="text-[10px] font-black text-[#8BC34A] uppercase tracking-widest mb-3 flex items-center gap-1.5">
-            <AlertCircle size={12} /> DUE TODAY
+          <h2 className="text-[10px] font-semibold text-[#8BC34A] capitalize tracking-wider mb-3 flex items-center gap-1.5">
+            <AlertCircle size={12} /> Due Today
           </h2>
 
           {today.length === 0 ? (
             <div className="bg-white/5 rounded-xl p-6 text-center border border-white/5">
-              <p className="text-white/25 font-bold">NO TASKS DUE TODAY!</p>
+              <p className="text-white/25 font-bold">No tasks due today!</p>
             </div>
           ) : (
             <div className="space-y-2">
@@ -170,9 +120,9 @@ export function Deadlines() {
                   <motion.div
                     key={task.id}
                     layout
-                    initial={{ opacity: 0, x: -10 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    exit={{ opacity: 0, x: 50, height: 0 }}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0, height: 0 }}
                     className={`bg-white/8 backdrop-blur-sm rounded-xl border p-4 flex items-center gap-3 ${
                       task.done ? "border-[#8BC34A]/20 opacity-50" : "border-white/10"
                     }`}
@@ -210,7 +160,7 @@ export function Deadlines() {
 
         {/* THIS WEEK */}
         <div>
-          <h2 className="text-[10px] font-black text-white/20 uppercase tracking-widest mb-3">THIS WEEK</h2>
+          <h2 className="text-[10px] font-semibold text-white/20 capitalize tracking-wider mb-3">This Week</h2>
           <div className="space-y-2">
             {week.map(task => (
               <div
@@ -272,14 +222,14 @@ export function Deadlines() {
         {showAddModal && (
           <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm">
             <motion.div
-              initial={{ y: "100%" }}
-              animate={{ y: 0 }}
-              exit={{ y: "100%" }}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
               transition={{ type: "spring", damping: 25 }}
               className="bg-[#0a0f07]/90 backdrop-blur-xl border-t border-white/10 rounded-t-3xl sm:rounded-2xl w-full sm:max-w-sm p-5 shadow-2xl"
             >
               <div className="w-10 h-1 bg-white/10 rounded-full mx-auto mb-4 sm:hidden" />
-              <h3 className="text-lg font-bold text-white mb-4">ADD TASK</h3>
+              <h3 className="text-lg font-bold text-white mb-4">Add Task</h3>
               <div className="space-y-3">
                 <input type="text" placeholder="Task name *" value={newTask.name} onChange={e => setNewTask({ ...newTask, name: e.target.value })}
                   className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder:text-white/20 outline-none focus:border-[#8BC34A]/40"
@@ -297,66 +247,6 @@ export function Deadlines() {
               </div>
             </motion.div>
           </div>
-        )}
-      </AnimatePresence>
-
-      {/* Canvas Connect Modal */}
-      <AnimatePresence>
-        {showCanvasModal && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[100] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
-            onClick={() => setShowCanvasModal(false)}
-          >
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="w-full max-w-sm bg-[#1a2e10]/95 border border-white/15 rounded-2xl p-4"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <h3 className="text-lg font-black text-white uppercase">Connect Canvas</h3>
-              <p className="text-xs text-white/45 mt-1">Paste your Canvas API token to sync assignments.</p>
-
-              <input
-                type="password"
-                value={canvasToken}
-                onChange={(e) => setCanvasToken(e.target.value)}
-                placeholder="Canvas token"
-                className="mt-3 w-full rounded-xl border border-white/15 bg-white/10 px-3 py-2.5 text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-[#8BC34A]/50"
-              />
-
-              <div className="mt-3 flex gap-2">
-                <button
-                  onClick={connectCanvas}
-                  className="flex-1 rounded-xl bg-[#8BC34A] px-3 py-2 text-xs font-black uppercase tracking-wider text-[#233216]"
-                >
-                  Connect
-                </button>
-                <button
-                  onClick={() => setShowCanvasHowTo((v) => !v)}
-                  className="rounded-xl border border-white/15 bg-white/8 px-3 py-2 text-xs font-black uppercase tracking-wider text-white/75"
-                >
-                  {showCanvasHowTo ? "Hide How To" : "How To"}
-                </button>
-              </div>
-
-              {showCanvasHowTo && (
-                <div className="mt-3 rounded-xl border border-white/12 bg-white/5 p-3 text-xs text-white/70 space-y-1">
-                  <p>1. Open Canvas and sign in.</p>
-                  <p>2. Go to Account -&gt; Settings.</p>
-                  <p>3. Scroll to Approved Integrations.</p>
-                  <p>4. Click + New Access Token.</p>
-                  <p>5. Copy token and paste it here.</p>
-                </div>
-              )}
-
-              {canvasStatus && <p className="mt-3 text-xs font-bold text-[#8BC34A]">{canvasStatus}</p>}
-              {canvasError && <p className="mt-3 text-xs font-bold text-red-400">{canvasError}</p>}
-            </motion.div>
-          </motion.div>
         )}
       </AnimatePresence>
 

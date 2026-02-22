@@ -7,8 +7,6 @@ const natureBg = "https://images.unsplash.com/photo-1681926946700-73c10c72ef15?c
 export function Root() {
   const location = useLocation();
   const frameRef = useRef<HTMLDivElement | null>(null);
-  const safeTopRoutes = new Set(["/", "/landing", "/signin", "/preferences"]);
-  const needsGlobalTopInset = !safeTopRoutes.has(location.pathname);
 
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
@@ -32,7 +30,6 @@ export function Root() {
         className="relative z-10 w-full"
         style={{
           height: "100%",
-          paddingTop: needsGlobalTopInset ? "env(safe-area-inset-top)" : undefined,
         }}
       >
         <div

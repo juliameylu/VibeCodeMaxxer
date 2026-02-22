@@ -60,15 +60,11 @@ export function Preferences() {
   useEffect(() => {
       if(isAnimating) {
           const timer = setTimeout(() => {
-              navigate('/explore', { state: { category: 'For You' } });
+              navigate('/dashboard');
           }, 3500);
           return () => clearTimeout(timer);
       }
   }, [isAnimating, navigate]);
-
-  useEffect(() => {
-    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
-  }, []);
 
   const handleLocation = (val: 'inside' | 'outside' | 'both') => {
     setPrefs({ ...prefs, locationType: val });
@@ -115,7 +111,7 @@ export function Preferences() {
                 initial={{ opacity: 0, scale: 0.8 }}
                 animate={{ opacity: 1, scale: 1 }}
                 transition={{ duration: 1, ease: "easeOut" }}
-                className="text-4xl md:text-6xl font-bold font-serif italic mb-4 text-[#F2E8CF]"
+                className="text-4xl md:text-6xl font-bold italic mb-4 text-[#F2E8CF]"
               >
                   Personalizing PolyJarvis...
               </motion.h1>
@@ -129,31 +125,23 @@ export function Preferences() {
                  initial={{ opacity: 0 }}
                  animate={{ opacity: 1 }}
                  transition={{ delay: 1 }}
-                 className="text-white/80 uppercase tracking-widest text-sm"
+                 className="text-white/80 capitalize tracking-wider text-sm"
               >
-                  Finding your top picks
+                  Setting up your dashboard
               </motion.p>
           </motion.div>
       );
   }
 
   return (
-    <div className="relative w-full h-[100dvh] overflow-hidden bg-transparent">
-      <div
-        className="relative z-10"
-        style={{
-          paddingTop: "env(safe-area-inset-top)",
-          paddingBottom: "env(safe-area-inset-bottom)",
-          height: "100dvh",
-          boxSizing: "border-box",
-          display: "flex",
-          flexDirection: "column",
-        }}
-      >
-      <div className="flex-1 overflow-y-auto p-6 pb-32">
-      <div className="z-10 w-full max-w-md mx-auto space-y-8">
+    <div
+      className="relative min-h-[100dvh] flex flex-col items-center justify-start p-6 text-white overflow-y-auto pb-32 bg-transparent"
+      style={{ paddingTop: "calc(env(safe-area-inset-top) + 22px)" }}
+    >
+      
+      <div className="z-10 w-full max-w-md space-y-8">
         <div className="text-center space-y-2">
-          <p className="text-xs text-white/40 uppercase tracking-widest font-bold">Step {step + 1} of 5</p>
+          <p className="text-xs text-white/40 capitalize tracking-wider font-semibold">Step {step + 1} of 5</p>
           <h1 className="text-3xl font-bold text-white">Let's tailor your day.</h1>
           <p className="text-sm text-white/50">Select what you want — or skip with ✕</p>
         </div>
@@ -185,8 +173,8 @@ export function Preferences() {
         <AnimatePresence>
           {step >= 1 && (
             <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
               className="space-y-4"
             >
               <h2 className="text-lg font-bold flex items-center gap-2 text-white">
@@ -228,8 +216,8 @@ export function Preferences() {
         <AnimatePresence>
             {step >= 2 && (
                 <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
                     className="space-y-4"
                 >
                     <h2 className="text-xl font-bold flex items-center gap-2 text-white">
@@ -263,13 +251,13 @@ export function Preferences() {
         <AnimatePresence>
           {step >= 3 && (
             <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
               className="space-y-4"
             >
               <h2 className="text-xl font-bold flex items-center gap-2 text-white">
                 <span className="bg-[#8BC34A] text-[#233216] w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold">4</span>
-                Are you okay w/ Zipcars?
+                Do you want to see Zipcars?
               </h2>
               <div className="flex gap-4">
                 {[
@@ -298,8 +286,8 @@ export function Preferences() {
         <AnimatePresence>
           {step >= 4 && (
             <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
               className="space-y-4"
             >
               <h2 className="text-lg font-bold flex items-center gap-2 text-white">
@@ -350,14 +338,14 @@ export function Preferences() {
                       : "bg-white/10 text-white/20 cursor-not-allowed"
                   )}
                 >
-                  Find My Adventures
+                  Find My Spots
                   <ArrowRight size={20} />
                 </button>
               </div>
             </motion.div>
           )}
         </AnimatePresence>
-      </div></div></div>
+      </div>
     </div>
   );
 }

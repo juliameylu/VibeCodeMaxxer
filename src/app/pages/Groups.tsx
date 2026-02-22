@@ -111,7 +111,7 @@ export function Groups() {
   };
 
   return (
-    <div className="min-h-full bg-transparent text-white pb-24">
+    <div className="min-h-[100dvh] bg-transparent text-white pb-24">
       <PageHeader />
       {/* Header */}
       <div className="px-5 pb-4 border-b border-white/5">
@@ -122,10 +122,10 @@ export function Groups() {
             </button>
           )}
           <div className="flex-1">
-            <h1 className="text-2xl font-black text-white tracking-tight uppercase">
-              {view === "list" ? "GROUPS" : view === "addPerson" ? "ADD PERSON" : view === "addGroup" ? "NEW GROUP" : selectedGroup?.name?.toUpperCase()}
+            <h1 className="text-2xl font-bold text-white tracking-tight capitalize">
+              {view === "list" ? "Groups" : view === "addPerson" ? "Add Person" : view === "addGroup" ? "New Group" : selectedGroup?.name}
             </h1>
-            {view === "list" && <p className="text-[10px] text-white/25 font-bold uppercase tracking-wider">MANAGE YOUR PEOPLE & INVITE THEM TO EVENTS</p>}
+            {view === "list" && <p className="text-[10px] text-white/25 font-bold capitalize tracking-wider">Manage your people & invite them to events</p>}
           </div>
           {view === "list" && (
             <div className="flex gap-2">
@@ -144,7 +144,7 @@ export function Groups() {
         {view === "list" && (
           <div className="space-y-6">
             <div>
-              <h2 className="text-[10px] font-black text-white/25 uppercase tracking-widest mb-3">MY GROUPS</h2>
+              <h2 className="text-[10px] font-semibold text-white/25 capitalize tracking-wider mb-3">My Groups</h2>
               {groups.length === 0 ? (
                 <div className="bg-white/3 rounded-xl p-6 text-center border border-dashed border-white/10">
                   <p className="text-white/25 text-sm font-bold">NO GROUPS YET</p>
@@ -177,7 +177,7 @@ export function Groups() {
             </div>
 
             <div>
-              <h2 className="text-[10px] font-black text-white/25 uppercase tracking-widest mb-3">ALL PEOPLE ({people.length})</h2>
+              <h2 className="text-[10px] font-semibold text-white/25 capitalize tracking-wider mb-3">All People ({people.length})</h2>
               <div className="space-y-2">
                 {people.map(person => (
                   <div key={person.id} className="bg-white/5 rounded-xl border border-white/8 p-3 flex items-center gap-3">
@@ -243,7 +243,7 @@ export function Groups() {
               className="w-full border border-white/10 bg-white/5 rounded-xl px-4 py-3 text-sm text-white placeholder:text-white/20 focus:border-[#8BC34A]/40 outline-none"
             />
             <div>
-              <p className="text-[10px] text-white/25 font-black uppercase tracking-widest mb-2">SELECT MEMBERS</p>
+              <p className="text-[10px] text-white/25 font-semibold capitalize tracking-wider mb-2">Select Members</p>
               <div className="space-y-2">
                 {people.map(person => (
                   <button

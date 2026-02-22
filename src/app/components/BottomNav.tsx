@@ -20,7 +20,7 @@ export function BottomNav() {
       const vv = window.visualViewport;
       if (!vv) return;
       // iOS keyboard usually shrinks viewport height significantly.
-      const shrunk = vv.height < window.innerHeight * 0.82;
+      const shrunk = vv.height < window.innerHeight * 0.9;
       if (shrunk) setKeyboardOpen(true);
       else {
         const active = document.activeElement;
@@ -44,12 +44,14 @@ export function BottomNav() {
     document.addEventListener("focusin", onFocusIn);
     document.addEventListener("focusout", onFocusOut);
     window.visualViewport?.addEventListener("resize", syncFromViewport);
+    window.visualViewport?.addEventListener("scroll", syncFromViewport);
     syncFromViewport();
 
     return () => {
       document.removeEventListener("focusin", onFocusIn);
       document.removeEventListener("focusout", onFocusOut);
       window.visualViewport?.removeEventListener("resize", syncFromViewport);
+      window.visualViewport?.removeEventListener("scroll", syncFromViewport);
     };
   }, []);
 
@@ -74,6 +76,15 @@ export function BottomNav() {
     };
   }, [keyboardOpen]);
 
+  useEffect(() => {
+    if (keyboardOpen) return;
+    window.dispatchEvent(
+      new CustomEvent("polyjarvis:bottom-nav-visible", {
+        detail: { pathname, visible: true },
+      }),
+    );
+  }, [keyboardOpen, pathname]);
+
   const tabs = [
     { path: "/dashboard", label: "HOME", icon: (s: number) => <Home size={s} /> },
     { path: "/jarvis", label: "JARVIS", icon: (s: number) => <JarvisLogo size={s} /> },
@@ -89,6 +100,7 @@ export function BottomNav() {
   return (
     <nav
       ref={navRef}
+      data-bottom-nav="true"
       className="fixed inset-x-0 bg-[#1a2e10]/88 backdrop-blur-xl border-t border-white/10 z-[90] shadow-[0_-4px_30px_rgba(0,0,0,0.3)]"
       style={{
         bottom: 0,

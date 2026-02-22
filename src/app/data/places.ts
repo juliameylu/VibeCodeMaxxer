@@ -23,6 +23,7 @@ export interface Place {
   tags: string[];
   address?: string;
   website?: string;
+  menuUrl?: string;
   notes?: string;
   estimatedTime?: string;
   elevation?: string;
@@ -33,73 +34,58 @@ export interface Place {
   lng: number;
 }
 
-export function getPlaceEmoji(place: Pick<Place, "category" | "subcategory" | "tags" | "name">): string {
-  const sub = (place.subcategory || "").toLowerCase();
-  const tags = (place.tags || []).map((t) => t.toLowerCase());
-  const name = (place.name || "").toLowerCase();
-  const category = (place.category || "").toLowerCase();
-  const source = `${sub} ${tags.join(" ")} ${name}`;
+// Area groupings for map filtering
+export const areaGroups = [
+  { id: "all", label: "ALL AREAS" },
+  { id: "Downtown SLO", label: "DOWNTOWN" },
+  { id: "Cal Poly", label: "CAL POLY" },
+  { id: "San Luis Obispo", label: "SLO AREA" },
+  { id: "Poly Canyon", label: "POLY CANYON" },
+  { id: "beach", label: "BEACHES" },
+  { id: "north", label: "NORTH COUNTY" },
+];
 
-  if (/pizza/.test(source)) return "🍕";
-  if (/cafe|coffee|espresso|latte/.test(source)) return "☕";
-  if (/deli|sandwich/.test(source)) return "🥪";
-  if (/sushi/.test(source)) return "🍣";
-  if (/taco|mexican|taqueria|burrito/.test(source)) return "🌮";
-  if (/bbq|barbecue|grill|tri-tip/.test(source)) return "🍖";
-  if (/burger/.test(source)) return "🍔";
-  if (/bakery|cake|pastry/.test(source)) return "🍰";
-  if (/acai|smoothie|juice/.test(source)) return "🥣";
-  if (/brewery|beer|bar/.test(source)) return "🍺";
-
-  if (category.includes("food")) return "🍽️";
-  if (category.includes("coffee")) return "☕";
-  if (category.includes("beach")) return "🏖️";
-  if (category.includes("hike")) return "🥾";
-  if (category.includes("water")) return "🌊";
-  if (category.includes("museum") || category.includes("art")) return "🎨";
-  if (category.includes("movies")) return "🎬";
-  if (category.includes("live music") || category.includes("theater")) return "🎵";
-  if (category.includes("study") || category.includes("libraries")) return "📚";
-  if (category.includes("shopping")) return "🛍️";
-  if (category.includes("gym") || category.includes("wellness")) return "💪";
-
-  return "📍";
+export function matchesArea(place: Place, areaId: string): boolean {
+  if (areaId === "all") return true;
+  if (areaId === "beach") return ["Pismo Beach","Avila Beach","Shell Beach","Oceano"].includes(place.location);
+  if (areaId === "north") return ["Paso Robles","Atascadero","San Simeon","Morro Bay","Los Osos","Cambria","Big Sur Gateway"].includes(place.location);
+  return place.location === areaId;
 }
 
 // Helper to assign images based on category
 const getCategoryImg = (cat: string) => {
     const map: Record<string, string> = {
-        "Beaches": "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?fm=jpg&fit=crop&w=800&q=80",
-        "Hikes": "https://images.unsplash.com/photo-1551632811-561732d1e306?fm=jpg&fit=crop&w=800&q=80",
-        "Water Sports": "https://images.unsplash.com/photo-1544551763-46a013bb70d5?fm=jpg&fit=crop&w=800&q=80",
-        "Outdoors": "https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?fm=jpg&fit=crop&w=800&q=80",
-        "Parks & Gardens": "https://images.unsplash.com/photo-1496070242169-e60f61e73a91?fm=jpg&fit=crop&w=800&q=80",
-        "Viewpoints": "https://images.unsplash.com/photo-1449824913935-59a10b8d2000?fm=jpg&fit=crop&w=800&q=80",
-        "Movies": "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?fm=jpg&fit=crop&w=800&q=80",
-        "Live Music": "https://images.unsplash.com/photo-1459749411177-8c4750bb0657?fm=jpg&fit=crop&w=800&q=80",
-        "Theater & Comedy": "https://images.unsplash.com/photo-1507676184212-d03816b9b54b?fm=jpg&fit=crop&w=800&q=80",
-        "Museums": "https://images.unsplash.com/photo-1518998053901-5348d3969104?fm=jpg&fit=crop&w=800&q=80",
-        "Art": "https://images.unsplash.com/photo-1547826039-bfc35e0f1ea8?fm=jpg&fit=crop&w=800&q=80",
-        "History": "https://images.unsplash.com/photo-1461360370896-922624d12aa1?fm=jpg&fit=crop&w=800&q=80",
-        "Games & Arcades": "https://images.unsplash.com/photo-1511512578047-dfb367046420?fm=jpg&fit=crop&w=800&q=80",
-        "Escape Rooms": "https://images.unsplash.com/photo-1519074069444-1ba4fff66d16?fm=jpg&fit=crop&w=800&q=80",
-        "Bowling": "https://images.unsplash.com/photo-1534438327276-14e5300c3a48?fm=jpg&fit=crop&w=800&q=80",
-        "Skating": "https://images.unsplash.com/photo-1520013511976-b30f81a7b882?fm=jpg&fit=crop&w=800&q=80",
-        "Study Spots": "https://images.unsplash.com/photo-1497633762265-9d179a990aa6?fm=jpg&fit=crop&w=800&q=80",
-        "Coffee Shops": "https://images.unsplash.com/photo-1501339847302-ac426a4a7cbb?fm=jpg&fit=crop&w=800&q=80",
-        "Libraries": "https://images.unsplash.com/photo-1521587760476-6c12a4b040da?fm=jpg&fit=crop&w=800&q=80",
-        "Family & Kids": "https://images.unsplash.com/photo-1485546246426-74dc88dec4d9?fm=jpg&fit=crop&w=800&q=80",
-        "Zoos & Aquariums": "https://images.unsplash.com/photo-1534567153574-2f12153ee447?fm=jpg&fit=crop&w=800&q=80",
-        "Farms & Animals": "https://images.unsplash.com/photo-1444858291040-58f756a3bdd6?fm=jpg&fit=crop&w=800&q=80",
-        "Wineries": "https://images.unsplash.com/photo-1516594915697-87eb3b1c14ea?fm=jpg&fit=crop&w=800&q=80",
-        "Breweries": "https://images.unsplash.com/photo-1584225064785-c62a8b43d148?fm=jpg&fit=crop&w=800&q=80",
-        "Food & Treats": "https://images.unsplash.com/photo-1504674900247-0877df9cc836?fm=jpg&fit=crop&w=800&q=80",
-        "Farmers Markets": "https://images.unsplash.com/photo-1488459716781-31db52582fe9?fm=jpg&fit=crop&w=800&q=80",
-        "Wellness": "https://images.unsplash.com/photo-1544161515-4ab6ce6db874?fm=jpg&fit=crop&w=800&q=80",
-        "Hot Springs & Spas": "https://images.unsplash.com/photo-1544161515-4ab6ce6db874?fm=jpg&fit=crop&w=800&q=80",
-        "Shopping": "https://images.unsplash.com/photo-1483985988355-763728e1935b?fm=jpg&fit=crop&w=800&q=80",
-        "Day Trips": "https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?fm=jpg&fit=crop&w=800&q=80",
-        "Gym": "https://images.unsplash.com/photo-1534438327276-14e5300c3a48?fm=jpg&fit=crop&w=800&q=80",
+        "Beaches": "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=800&q=80",
+        "Hikes": "https://images.unsplash.com/photo-1551632811-561732d1e306?auto=format&fit=crop&w=800&q=80",
+        "Water Sports": "https://images.unsplash.com/photo-1544551763-46a013bb70d5?auto=format&fit=crop&w=800&q=80",
+        "Outdoors": "https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?auto=format&fit=crop&w=800&q=80",
+        "Parks & Gardens": "https://images.unsplash.com/photo-1496070242169-e60f61e73a91?auto=format&fit=crop&w=800&q=80",
+        "Viewpoints": "https://images.unsplash.com/photo-1449824913935-59a10b8d2000?auto=format&fit=crop&w=800&q=80",
+        "Movies": "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?auto=format&fit=crop&w=800&q=80",
+        "Live Music": "https://images.unsplash.com/photo-1459749411177-8c4750bb0657?auto=format&fit=crop&w=800&q=80",
+        "Theater & Comedy": "https://images.unsplash.com/photo-1507676184212-d03816b9b54b?auto=format&fit=crop&w=800&q=80",
+        "Museums": "https://images.unsplash.com/photo-1518998053901-5348d3969104?auto=format&fit=crop&w=800&q=80",
+        "Art": "https://images.unsplash.com/photo-1547826039-bfc35e0f1ea8?auto=format&fit=crop&w=800&q=80",
+        "History": "https://images.unsplash.com/photo-1461360370896-922624d12aa1?auto=format&fit=crop&w=800&q=80",
+        "Games & Arcades": "https://images.unsplash.com/photo-1511512578047-dfb367046420?auto=format&fit=crop&w=800&q=80",
+        "Escape Rooms": "https://images.unsplash.com/photo-1519074069444-1ba4fff66d16?auto=format&fit=crop&w=800&q=80",
+        "Bowling": "https://images.unsplash.com/photo-1534438327276-14e5300c3a48?auto=format&fit=crop&w=800&q=80",
+        "Skating": "https://images.unsplash.com/photo-1520013511976-b30f81a7b882?auto=format&fit=crop&w=800&q=80",
+        "Study Spots": "https://images.unsplash.com/photo-1497633762265-9d179a990aa6?auto=format&fit=crop&w=800&q=80",
+        "Coffee Shops": "https://images.unsplash.com/photo-1501339847302-ac426a4a7cbb?auto=format&fit=crop&w=800&q=80",
+        "Libraries": "https://images.unsplash.com/photo-1521587760476-6c12a4b040da?auto=format&fit=crop&w=800&q=80",
+        "Family & Kids": "https://images.unsplash.com/photo-1485546246426-74dc88dec4d9?auto=format&fit=crop&w=800&q=80",
+        "Zoos & Aquariums": "https://images.unsplash.com/photo-1534567153574-2f12153ee447?auto=format&fit=crop&w=800&q=80",
+        "Farms & Animals": "https://images.unsplash.com/photo-1444858291040-58f756a3bdd6?auto=format&fit=crop&w=800&q=80",
+        "Wineries": "https://images.unsplash.com/photo-1516594915697-87eb3b1c14ea?auto=format&fit=crop&w=800&q=80",
+        "Breweries": "https://images.unsplash.com/photo-1584225064785-c62a8b43d148?auto=format&fit=crop&w=800&q=80",
+        "Food & Treats": "https://images.unsplash.com/photo-1504674900247-0877df9cc836?auto=format&fit=crop&w=800&q=80",
+        "Farmers Markets": "https://images.unsplash.com/photo-1488459716781-31db52582fe9?auto=format&fit=crop&w=800&q=80",
+        "Wellness": "https://images.unsplash.com/photo-1544161515-4ab6ce6db874?auto=format&fit=crop&w=800&q=80",
+        "Hot Springs & Spas": "https://images.unsplash.com/photo-1544161515-4ab6ce6db874?auto=format&fit=crop&w=800&q=80",
+        "Shopping": "https://images.unsplash.com/photo-1483985988355-763728e1935b?auto=format&fit=crop&w=800&q=80",
+        "Day Trips": "https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?auto=format&fit=crop&w=800&q=80",
+        "Gym": "https://images.unsplash.com/photo-1534438327276-14e5300c3a48?auto=format&fit=crop&w=800&q=80",
     };
     return map[cat] || map["Outdoors"];
 };
@@ -119,7 +105,33 @@ export function getDistanceMiles(lat1: number, lng1: number, lat2: number, lng2:
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-export const places: Place[] = [
+export function getPlaceEmoji(place: Pick<Place, "category" | "subcategory" | "tags" | "name">): string {
+  const category = (place.subcategory || place.category || "").toLowerCase();
+  const tags = Array.isArray(place.tags) ? place.tags.join(" ").toLowerCase() : "";
+  const haystack = `${category} ${tags} ${place.name.toLowerCase()}`;
+
+  if (haystack.includes("beach") || haystack.includes("ocean") || haystack.includes("surf")) return "🏖️";
+  if (haystack.includes("hike") || haystack.includes("trail") || haystack.includes("mountain")) return "🥾";
+  if (haystack.includes("water sport") || haystack.includes("kayak") || haystack.includes("paddle")) return "🌊";
+  if (haystack.includes("coffee") || haystack.includes("cafe")) return "☕";
+  if (haystack.includes("food") || haystack.includes("restaurant") || haystack.includes("pizza") || haystack.includes("bbq")) return "🍽️";
+  if (haystack.includes("brewery") || haystack.includes("bar") || haystack.includes("winery")) return "🍻";
+  if (haystack.includes("music") || haystack.includes("concert")) return "🎵";
+  if (haystack.includes("museum") || haystack.includes("art")) return "🎨";
+  if (haystack.includes("park") || haystack.includes("garden")) return "🌿";
+  if (haystack.includes("market")) return "🧺";
+  if (haystack.includes("movie") || haystack.includes("theater")) return "🎬";
+  if (haystack.includes("bowling") || haystack.includes("arcade") || haystack.includes("game")) return "🎮";
+  if (haystack.includes("gym") || haystack.includes("wellness") || haystack.includes("spa")) return "💪";
+  if (haystack.includes("study") || haystack.includes("library")) return "📚";
+  if (haystack.includes("shop")) return "🛍️";
+  if (haystack.includes("day trip") || haystack.includes("viewpoint")) return "🚗";
+  return "📍";
+}
+
+import { morePlaces } from "./morePlaces";
+
+const _basePlaces: Place[] = [
     // --- FAMOUS SLO FOOD & DRINK ---
     {
         id: "firestone-grill",
@@ -129,6 +141,7 @@ export const places: Place[] = [
         city: "San Luis Obispo",
         address: "1001 Higuera St, San Luis Obispo, CA 93401",
         website: "https://www.firestonegrill.com/",
+        menuUrl: "https://www.firestonegrill.com/menu",
         description: "Famous for their tri-tip sandwich and fries.",
         longDescription: "A San Luis Obispo landmark known for the best tri-tip sandwich in California. Great atmosphere with big TVs and outdoor seating.",
         tags: ["Tri-Tip", "Famous", "Patio"],
@@ -150,6 +163,7 @@ export const places: Place[] = [
         city: "San Luis Obispo",
         address: "350 High St, San Luis Obispo, CA 93401",
         website: "https://www.highstdeli.com/",
+        menuUrl: "https://www.highstdeli.com/menu",
         description: "Iconic historic deli with massive sandwiches.",
         longDescription: "Serving SLO since 1927. Famous for their laid-back vibe, retro decor, and huge, delicious sandwiches. Get the Dutch Punch.",
         tags: ["Sandwiches", "Lunch", "Local Fav"],
@@ -172,6 +186,7 @@ export const places: Place[] = [
         city: "San Luis Obispo",
         address: "1000 Higuera St, San Luis Obispo, CA 93401",
         website: "https://woodstocksslo.com/",
+        menuUrl: "https://woodstocksslo.com/menu",
         description: "The ultimate student pizza joint with folded crusts.",
         longDescription: "A staple of Cal Poly life. Famous for their folded-over crusts loaded with sauce and toppings. Open late.",
         tags: ["Pizza", "Beer", "Student Fav"],
@@ -194,6 +209,7 @@ export const places: Place[] = [
         city: "San Luis Obispo",
         address: "1040 Court St, San Luis Obispo, CA 93401",
         website: "https://www.seedslo.com/",
+        menuUrl: "https://www.seedslo.com/menu",
         description: "Trendy spot for acai bowls and artisan toast.",
         longDescription: "A bright, modern cafe serving fresh acai bowls, smoothies, and fancy toasts. Very Instagrammable.",
         tags: ["Acai", "Toast", "Juice"],
@@ -573,6 +589,7 @@ export const places: Place[] = [
         city: "San Luis Obispo",
         address: "100 Madonna Rd, San Luis Obispo, CA 93405",
         website: "https://www.madonnainn.com/",
+        menuUrl: "https://www.madonnainn.com/dining",
         description: "Whimsical landmark with famous pink cake.",
         longDescription: "A world-famous hotel known for its unique, over-the-top decor. Visit the bakery for a slice of Pink Champagne Cake — an essential SLO experience.",
         tags: ["Iconic", "Bakery", "Photo Spot"],
@@ -614,6 +631,7 @@ export const places: Place[] = [
         city: "San Luis Obispo",
         address: "855 Aerovista Pl, San Luis Obispo, CA 93401",
         website: "https://www.slobrew.com/",
+        menuUrl: "https://www.slobrew.com/menu",
         description: "Brewery, taproom, and concert venue.",
         longDescription: "Great food, fresh beer, and often hosts live music events. Large outdoor rock for bouldering. A favorite gathering spot.",
         tags: ["Beer", "Music", "Food"],
@@ -766,4 +784,218 @@ export const places: Place[] = [
         lat: 35.3040,
         lng: -120.6560,
     },
+    // ─── NEW DOWNTOWN BUSINESSES ─────────────────────────────────────────
+    {
+        id: "boo-boo-records", name: "Boo Boo Records", category: "Shopping", subcategory: "Record Store",
+        city: "San Luis Obispo", address: "978 Monterey St, SLO", description: "Legendary indie record store since 1974.",
+        longDescription: "SLO's most iconic record shop. Vinyl, CDs, tapes, posters. Live in-store events. A must-visit for music lovers.", tags: ["Vinyl", "Music", "Local"],
+        image: getCategoryImg("Shopping"), distance: "1.3 miles", price: "$", rating: 4.9, location: "Downtown SLO",
+        features: ["walkable", "trending"], estimatedTime: "30 min", lat: 35.2818, lng: -120.6590,
+    },
+    {
+        id: "cheap-thrills-records", name: "Cheap Thrills Records", category: "Shopping", subcategory: "Record Store",
+        city: "San Luis Obispo", address: "563 Higuera St, SLO", description: "Used records, CDs, and more at great prices.",
+        longDescription: "A treasure trove of used vinyl and CDs. Eclectic selection across every genre. Great for crate digging.", tags: ["Vinyl", "Used", "Bargain"],
+        image: getCategoryImg("Shopping"), distance: "1.4 miles", price: "$", rating: 4.7, location: "Downtown SLO",
+        features: ["walkable"], estimatedTime: "30 min", lat: 35.2775, lng: -120.6608,
+    },
+    {
+        id: "captain-nemo-games", name: "Captain Nemo Games", category: "Games & Arcades", subcategory: "Comics & TCG",
+        city: "San Luis Obispo", address: "563 Higuera St, SLO", description: "Comics, board games, and trading cards.",
+        longDescription: "The go-to spot for Magic: The Gathering, D&D, comics, and board games. Hosts tournaments and game nights.", tags: ["Games", "Comics", "Nerd"],
+        image: getCategoryImg("Games & Arcades"), distance: "1.4 miles", price: "$", rating: 4.6, location: "Downtown SLO",
+        features: ["walkable", "group friendly"], estimatedTime: "1 hr", lat: 35.2780, lng: -120.6612,
+    },
+    {
+        id: "phoenix-books", name: "Phoenix Books", category: "Shopping", subcategory: "Used Bookstore",
+        city: "San Luis Obispo", address: "990 Monterey St, SLO", description: "Beloved used bookstore downtown.",
+        longDescription: "Two floors of used books at great prices. History, fiction, rare finds. A warm, browsable spot.", tags: ["Books", "Reading", "Cozy"],
+        image: getCategoryImg("Shopping"), distance: "1.3 miles", price: "$", rating: 4.8, location: "Downtown SLO",
+        features: ["walkable"], estimatedTime: "30 min", lat: 35.2822, lng: -120.6592,
+    },
+    {
+        id: "kreuzberg-coffee", name: "Kreuzberg Coffee Company", category: "Coffee Shops", subcategory: "Cafe & Bar",
+        city: "San Luis Obispo", address: "685 Higuera St, SLO", description: "Coffee by day, cocktails by night. Art-forward.",
+        longDescription: "Eclectic cafe that transitions to a bar in the evening. Hosts art shows and live music. Two floors, strong WiFi, open late.", tags: ["Coffee", "Bar", "Art", "Late Night"],
+        image: getCategoryImg("Coffee Shops"), distance: "1.4 miles", price: "$$", rating: 4.8, location: "Downtown SLO",
+        features: ["walkable", "late night", "group friendly", "trending"], estimatedTime: "1-2 hr", lat: 35.2790, lng: -120.6616,
+    },
+    {
+        id: "blackhorse-espresso", name: "BlackHorse Espresso", category: "Coffee Shops", subcategory: "Cafe",
+        city: "San Luis Obispo", address: "Multiple locations, SLO", description: "Local chain with strong espresso and pastries.",
+        longDescription: "Beloved SLO coffee chain. Multiple locations across town. Known for consistent quality and quick service.", tags: ["Coffee", "Quick", "Local"],
+        image: getCategoryImg("Coffee Shops"), distance: "1 mile", price: "$", rating: 4.5, location: "Downtown SLO",
+        features: ["walkable", "quick bite"], estimatedTime: "20 min", lat: 35.2808, lng: -120.6632,
+    },
+    {
+        id: "palm-theatre", name: "Palm Theatre", category: "Movies", subcategory: "Indie Cinema",
+        city: "San Luis Obispo", address: "817 Palm St, SLO", description: "Indie and foreign film cinema. Solar-powered.",
+        longDescription: "America's first solar-powered movie theater. Shows independent, foreign, and documentary films. A SLO cultural gem.", tags: ["Movies", "Indie", "Green"],
+        image: getCategoryImg("Movies"), distance: "1.2 miles", price: "$", rating: 4.7, location: "Downtown SLO",
+        features: ["walkable"], estimatedTime: "2 hr", lat: 35.2798, lng: -120.6652,
+    },
+    {
+        id: "giuseppes-slo", name: "Giuseppe's", category: "Food & Treats", subcategory: "Italian",
+        city: "San Luis Obispo", address: "849 Monterey St, SLO", description: "Upscale Italian dining with a great wine list.",
+        menuUrl: "https://www.giuseppesrestaurant.com/menu",
+        longDescription: "One of SLO's finest Italian restaurants. House-made pasta, wood-fired pizza, and a beautiful patio on Monterey St.", tags: ["Italian", "Date Night", "Wine"],
+        image: getCategoryImg("Food & Treats"), distance: "1.3 miles", price: "$$$", rating: 4.8, location: "Downtown SLO",
+        features: ["walkable", "outdoor seating"], estimatedTime: "1.5 hr", lat: 35.2795, lng: -120.6585,
+    },
+    {
+        id: "novo-restaurant", name: "Novo Restaurant", category: "Food & Treats", subcategory: "International",
+        city: "San Luis Obispo", address: "726 Higuera St, SLO", description: "World cuisine on a creekside patio.",
+        menuUrl: "https://www.novorestaurant.com/menu",
+        longDescription: "Brazilian, Mediterranean, and Asian fusion. The multi-level creekside patio is one of the best outdoor dining spots in SLO.", tags: ["Patio", "Dinner", "International"],
+        image: getCategoryImg("Food & Treats"), distance: "1.4 miles", price: "$$$", rating: 4.7, location: "Downtown SLO",
+        features: ["walkable", "outdoor seating", "group friendly"], estimatedTime: "1.5 hr", lat: 35.2798, lng: -120.6618,
+    },
+    {
+        id: "slo-provisions", name: "SLO Provisions", category: "Food & Treats", subcategory: "Cafe & Market",
+        city: "San Luis Obispo", address: "1255 Monterey St, SLO", description: "Fresh, local cafe with incredible biscuits.",
+        longDescription: "Farm-to-table cafe with artisan coffee, fresh-baked goods, and a curated market. The biscuit sandwiches are legendary.", tags: ["Breakfast", "Biscuits", "Local"],
+        image: getCategoryImg("Food & Treats"), distance: "1 mile", price: "$$", rating: 4.8, location: "Downtown SLO",
+        features: ["walkable", "quick bite", "healthy"], estimatedTime: "45 min", lat: 35.2830, lng: -120.6575,
+    },
+    {
+        id: "goshi-sushi", name: "Goshi Sushi", category: "Food & Treats", subcategory: "Japanese",
+        city: "San Luis Obispo", address: "570 Higuera St, SLO", description: "Fresh sushi and Japanese fare downtown.",
+        menuUrl: "https://www.goshijapanese.com/menu",
+        longDescription: "High-quality sushi at reasonable prices. Cozy interior, friendly staff. The spicy tuna roll and ramen are student favorites.", tags: ["Sushi", "Japanese", "Fresh"],
+        image: getCategoryImg("Food & Treats"), distance: "1.4 miles", price: "$$", rating: 4.6, location: "Downtown SLO",
+        features: ["walkable", "quick bite"], estimatedTime: "45 min", lat: 35.2778, lng: -120.6610,
+    },
+    {
+        id: "taqueria-santa-cruz", name: "Taqueria Santa Cruz", category: "Food & Treats", subcategory: "Mexican",
+        city: "San Luis Obispo", address: "Multiple locations, SLO", description: "Authentic Mexican street food. Student staple.",
+        longDescription: "Huge burritos, fresh salsa, and low prices. Open late. The go-to spot for Cal Poly students craving real Mexican food.", tags: ["Mexican", "Burritos", "Cheap"],
+        image: getCategoryImg("Food & Treats"), distance: "1.5 miles", price: "$", rating: 4.5, location: "Downtown SLO",
+        features: ["walkable", "quick bite", "late night"], estimatedTime: "30 min", lat: 35.2772, lng: -120.6605,
+    },
+    {
+        id: "petra-mediterranean", name: "Petra Mediterranean", category: "Food & Treats", subcategory: "Mediterranean",
+        city: "San Luis Obispo", address: "1210 Higuera St, SLO", description: "Fresh Mediterranean wraps, falafel, and bowls.",
+        longDescription: "Healthy, flavorful Mediterranean food. Great falafel wraps, hummus, and grain bowls. Quick service, good portions.", tags: ["Mediterranean", "Healthy", "Falafel"],
+        image: getCategoryImg("Food & Treats"), distance: "1.3 miles", price: "$", rating: 4.6, location: "Downtown SLO",
+        features: ["walkable", "quick bite", "healthy"], estimatedTime: "30 min", lat: 35.2825, lng: -120.6625,
+    },
+    {
+        id: "wildflower-women", name: "Wildflower Women", category: "Shopping", subcategory: "Boutique",
+        city: "San Luis Obispo", address: "Downtown SLO", description: "Curated women's boutique with local designers.",
+        longDescription: "A beautiful boutique featuring sustainable and local fashion brands. Unique finds you won't see elsewhere.", tags: ["Fashion", "Boutique", "Gifts"],
+        image: getCategoryImg("Shopping"), distance: "1.3 miles", price: "$$", rating: 4.6, location: "Downtown SLO",
+        features: ["walkable"], estimatedTime: "30 min", lat: 35.2810, lng: -120.6635,
+    },
+    {
+        id: "junkgirls-vintage", name: "Junkgirls", category: "Shopping", subcategory: "Vintage / Eclectic",
+        city: "San Luis Obispo", address: "Downtown SLO", description: "Eclectic vintage finds and quirky home goods.",
+        longDescription: "A treasure hunt of vintage furniture, decor, and oddities. Every visit is different. Fun to browse even if you don't buy.", tags: ["Vintage", "Eclectic", "Fun"],
+        image: getCategoryImg("Shopping"), distance: "1.3 miles", price: "$", rating: 4.5, location: "Downtown SLO",
+        features: ["walkable"], estimatedTime: "30 min", lat: 35.2816, lng: -120.6628,
+    },
+    {
+        id: "slo-op-climbing", name: "SLO Op Climbing", category: "Gym", subcategory: "Bouldering",
+        city: "San Luis Obispo", address: "San Luis Obispo", description: "Indoor bouldering gym with great community.",
+        longDescription: "Modern bouldering facility with routes for all levels. Yoga classes, training boards, and a welcoming community of climbers.", tags: ["Climbing", "Bouldering", "Fitness"],
+        image: getCategoryImg("Gym"), distance: "2 miles", price: "$$", rating: 4.8, location: "San Luis Obispo",
+        features: ["group friendly", "healthy"], estimatedTime: "1-2 hr", lat: 35.2650, lng: -120.6550,
+    },
+    {
+        id: "slo-makerspace", name: "SLO Makerspace", category: "Art", subcategory: "Creative Space",
+        city: "San Luis Obispo", address: "Downtown SLO", description: "Community workshop with tools and classes.",
+        longDescription: "Shared workspace with 3D printers, laser cutters, woodworking tools, and more. Classes and memberships available.", tags: ["Making", "Creative", "Workshop"],
+        image: getCategoryImg("Art"), distance: "1.2 miles", price: "$", rating: 4.5, location: "Downtown SLO",
+        features: ["walkable"], estimatedTime: "2 hr", lat: 35.2785, lng: -120.6640,
+    },
+    {
+        id: "yoga-village-slo", name: "Yoga Village", category: "Wellness", subcategory: "Yoga Studio",
+        city: "San Luis Obispo", address: "Downtown SLO", description: "Welcoming yoga studio with all levels.",
+        longDescription: "Variety of yoga classes from vinyasa to yin. Student discounts available. Clean, peaceful space downtown.", tags: ["Yoga", "Wellness", "Relax"],
+        image: getCategoryImg("Wellness"), distance: "1.3 miles", price: "$", rating: 4.6, location: "Downtown SLO",
+        features: ["walkable", "healthy"], estimatedTime: "1 hr", lat: 35.2802, lng: -120.6648,
+    },
+    {
+        id: "slo-float", name: "SLO Float", category: "Wellness", subcategory: "Float Therapy",
+        city: "San Luis Obispo", address: "Downtown SLO", description: "Sensory deprivation float pods for deep relaxation.",
+        longDescription: "Float in a warm, dark, saltwater pod for ultimate relaxation. Great for stress relief, recovery, and meditation.", tags: ["Float", "Relax", "Unique"],
+        image: getCategoryImg("Wellness"), distance: "1.4 miles", price: "$$", rating: 4.7, location: "Downtown SLO",
+        features: ["walkable"], estimatedTime: "1.5 hr", lat: 35.2788, lng: -120.6622,
+    },
+    {
+        id: "mission-plaza", name: "Mission Plaza", category: "Parks & Gardens", subcategory: "Downtown Park",
+        city: "San Luis Obispo", address: "Mission Plaza, SLO", description: "Heart of downtown with the historic mission.",
+        longDescription: "A beautiful plaza surrounding Mission San Luis Obispo de Tolosa. Creek runs through it. Hosts festivals and events year-round.", tags: ["Historic", "Park", "Events"],
+        image: getCategoryImg("Parks & Gardens"), distance: "1.2 miles", price: "Free", rating: 4.7, location: "Downtown SLO",
+        features: ["walkable", "easy walk", "group friendly"], estimatedTime: "30 min", lat: 35.2808, lng: -120.6600,
+    },
+    {
+        id: "slo-museum-of-art", name: "SLO Museum of Art", category: "Museums", subcategory: "Art Museum",
+        city: "San Luis Obispo", address: "1010 Broad St, SLO", description: "Contemporary art exhibitions in a historic building.",
+        longDescription: "Rotating exhibits featuring local and international contemporary art. Free admission. Located in the beautifully restored Carnegie Library building.", tags: ["Art", "Free", "Gallery"],
+        image: getCategoryImg("Museums"), distance: "1.2 miles", price: "Free", rating: 4.5, location: "Downtown SLO",
+        features: ["walkable"], estimatedTime: "1 hr", lat: 35.2795, lng: -120.6640,
+    },
+    {
+        id: "slo-railroad-museum", name: "SLO Railroad Museum", category: "Museums", subcategory: "History Museum",
+        city: "San Luis Obispo", address: "1940 Santa Barbara Ave, SLO", description: "Train history and restored railcars.",
+        longDescription: "Small but charming museum showcasing the history of railroading on the Central Coast. Free admission, great for a quick visit.", tags: ["Trains", "History", "Free"],
+        image: getCategoryImg("Museums"), distance: "1 mile", price: "Free", rating: 4.3, location: "Downtown SLO",
+        features: ["walkable"], estimatedTime: "30 min", lat: 35.2760, lng: -120.6580,
+    },
+    {
+        id: "field-day-coffee", name: "Field Day Coffee", category: "Coffee Shops", subcategory: "Cafe",
+        city: "San Luis Obispo", address: "Downtown SLO", description: "Bright, modern cafe with excellent espresso.",
+        longDescription: "Newer addition to the SLO coffee scene. Clean aesthetic, quality drinks, and a welcoming vibe.", tags: ["Coffee", "Modern", "Aesthetic"],
+        image: getCategoryImg("Coffee Shops"), distance: "1.3 miles", price: "$$", rating: 4.6, location: "Downtown SLO",
+        features: ["walkable", "quick bite"], estimatedTime: "30 min", lat: 35.2820, lng: -120.6605,
+    },
+    {
+        id: "coastal-peaks-roasters", name: "Coastal Peaks Roasters", category: "Coffee Shops", subcategory: "Cafe",
+        city: "San Luis Obispo", address: "Downtown SLO", description: "Local roaster with a cozy taproom.",
+        longDescription: "Single-origin coffees roasted in-house. The taproom offers pour-over, cold brew on tap, and espresso drinks.", tags: ["Coffee", "Roaster", "Local"],
+        image: getCategoryImg("Coffee Shops"), distance: "1.4 miles", price: "$$", rating: 4.7, location: "Downtown SLO",
+        features: ["walkable"], estimatedTime: "30 min", lat: 35.2792, lng: -120.6638,
+    },
+    {
+        id: "library-bar-slo", name: "The Library Bar", category: "Breweries", subcategory: "Bar",
+        city: "San Luis Obispo", address: "Downtown SLO", description: "College bar staple on Higuera.",
+        longDescription: "The quintessential SLO college bar. Cheap drinks, loud music, packed on weekends. A rite of passage for Cal Poly students.", tags: ["Bar", "Nightlife", "College"],
+        image: getCategoryImg("Breweries"), distance: "1.4 miles", price: "$", rating: 4.2, location: "Downtown SLO",
+        features: ["walkable", "late night", "group friendly"], estimatedTime: "2 hr", lat: 35.2802, lng: -120.6614,
+    },
+    {
+        id: "neon-cactus-slo", name: "Neon Cactus", category: "Breweries", subcategory: "Bar",
+        city: "San Luis Obispo", address: "Downtown SLO", description: "Tex-Mex bar with frozen margaritas.",
+        longDescription: "Colorful Tex-Mex themed bar with great margaritas, tacos, and a fun atmosphere. Popular with the college crowd.", tags: ["Bar", "Margaritas", "Tex-Mex"],
+        image: getCategoryImg("Breweries"), distance: "1.4 miles", price: "$$", rating: 4.4, location: "Downtown SLO",
+        features: ["walkable", "late night", "group friendly"], estimatedTime: "1.5 hr", lat: 35.2808, lng: -120.6620,
+    },
+    {
+        id: "dallidet-adobe", name: "Dallidet Adobe Gardens", category: "Parks & Gardens", subcategory: "Historic Garden",
+        city: "San Luis Obispo", address: "1185 Pacific St, SLO", description: "Peaceful historic garden and adobe house.",
+        longDescription: "One of the oldest residences in SLO. Beautiful gardens, a serene escape from downtown. Hosts occasional events.", tags: ["Historic", "Garden", "Peaceful"],
+        image: getCategoryImg("Parks & Gardens"), distance: "1.3 miles", price: "Free", rating: 4.4, location: "Downtown SLO",
+        features: ["walkable", "easy walk"], estimatedTime: "30 min", lat: 35.2782, lng: -120.6660,
+    },
+    {
+        id: "blaze-pizza-slo", name: "Blaze Pizza", category: "Food & Treats", subcategory: "Fast-Casual Pizza",
+        city: "San Luis Obispo", address: "Downtown SLO", description: "Build-your-own fast-fired pizza.",
+        longDescription: "Chipotle-style pizza where you pick your toppings. Fired in 180 seconds. Affordable and filling for students.", tags: ["Pizza", "Quick", "Cheap"],
+        image: getCategoryImg("Food & Treats"), distance: "1.3 miles", price: "$", rating: 4.3, location: "Downtown SLO",
+        features: ["walkable", "quick bite"], estimatedTime: "30 min", lat: 35.2815, lng: -120.6610,
+    },
 ];
+
+// Merge base places + morePlaces (fully deduped by id AND name — keeps first occurrence)
+const _seenIds = new Set<string>();
+const _seenNames = new Set<string>();
+const _deduped: Place[] = [];
+for (const p of [..._basePlaces, ...morePlaces]) {
+    const normName = p.name.toLowerCase().trim();
+    if (!_seenIds.has(p.id) && !_seenNames.has(normName)) {
+        _seenIds.add(p.id);
+        _seenNames.add(normName);
+        _deduped.push(p);
+    }
+}
+export const places: Place[] = _deduped;

@@ -16,6 +16,7 @@ import { Jams } from "./pages/Jams";
 import { Tutorial } from "./pages/Tutorial";
 import { Plans } from "./pages/Plans";
 import { Friends } from "./pages/Friends";
+import { MapPage } from "./pages/Map";
 
 export const router = createBrowserRouter([
   {
@@ -34,11 +35,11 @@ export const router = createBrowserRouter([
       { path: "myevents", Component: MyEvents },
       { path: "groups", Component: Groups },
       { path: "jarvis", Component: Jarvis },
-      { path: "ai", Component: Jarvis },
       { path: "jams", Component: Jams },
       { path: "tutorial", Component: Tutorial },
       { path: "plans", Component: Plans },
       { path: "friends", Component: Friends },
+      { path: "map", Component: MapPage },
       { path: "*", Component: NotFound },
     ],
   },

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { motion, AnimatePresence } from "motion/react";
 import { ArrowRight, User } from "lucide-react";
 import { JarvisLogo } from "../components/JarvisLogo";
@@ -34,148 +34,149 @@ const promptPills = [
 
 export function Landing() {
   const [heroIdx, setHeroIdx] = useState(0);
+  const [showAgeGate, setShowAgeGate] = useState(false);
+  const nav = useNavigate();
 
   useEffect(() => {
     const t = setInterval(() => setHeroIdx(i => (i + 1) % heroLines.length), 3000);
     return () => clearInterval(t);
   }, []);
 
+  const handleGetStarted = () => {
+    const ageCheck = localStorage.getItem("polyjarvis_age_21");
+    if (ageCheck) {
+      nav("/signin", { state: { mode: "signup" } });
+    } else {
+      setShowAgeGate(true);
+    }
+  };
+
+  const handleAgeAnswer = (is21: boolean) => {
+    localStorage.setItem("polyjarvis_age_21", is21 ? "yes" : "no");
+    setShowAgeGate(false);
+    nav("/signin", { state: { mode: "signup" } });
+  };
+
   const marqueeItems = [...promptPills, ...promptPills];
 
   return (
-    <div className="relative w-full h-[100dvh] overflow-hidden bg-transparent">
+    <div className="relative min-h-[100dvh] flex flex-col items-center overflow-hidden bg-transparent">
       {/* BG image */}
       <div className="absolute inset-0 z-0">
         <img src={landingBg} alt="" className="w-full h-full object-cover opacity-60" />
         <div className="absolute inset-0 bg-gradient-to-b from-[#1a2e10]/30 via-[#0d1208]/50 to-[#0d1208]" />
       </div>
-      <div
-        className="relative z-10"
-        style={{
-          paddingTop: "env(safe-area-inset-top)",
-          paddingBottom: "env(safe-area-inset-bottom)",
-          height: "100dvh",
-          boxSizing: "border-box",
-          display: "flex",
-          flexDirection: "column",
-        }}
-      >
-        <div className="flex-1 overflow-y-auto flex flex-col items-center">
-          {/* Spacer above hero block */}
-          <div className="flex-1 min-h-[4vh]" />
 
-          {/* Center content block: Logo + Title + Rotating text */}
-          <div className="z-10 flex flex-col items-center text-center px-5 max-w-md mx-auto">
-            {/* Logo */}
-            <motion.div
-              initial={{ opacity: 0, scale: 0.8 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ duration: 0.6, type: "spring", stiffness: 120 }}
-              className="mb-4 relative"
-            >
-              <div className="absolute inset-0 -m-4 rounded-full bg-[#F2E8CF]/15 blur-2xl animate-pulse" />
-              <div className="relative w-20 h-20 bg-[#F2E8CF] rounded-full flex items-center justify-center shadow-2xl shadow-[#F2E8CF]/20 border-4 border-[#F2E8CF]/40">
-                <JarvisLogo size={44} className="text-[#233216]" />
-              </div>
-            </motion.div>
+      {/* Spacer to push content to vertical center area */}
+      <div className="flex-1 min-h-[10vh]" />
 
-            {/* POLYJARVIS logo text */}
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ delay: 0.15 }}
-              className="mb-2"
-            >
-              <h1 className="text-[clamp(1.35rem,5vw,1.85rem)] tracking-[0.18em] uppercase font-black drop-shadow-lg">
-                <span className="text-white">POLY</span>
-                <span className="text-[#F2E8CF]">JARVIS</span>
-              </h1>
-              <p className="text-[9px] text-white/40 font-bold tracking-[0.16em] uppercase mt-0.5">
-                SAN LUIS OBISPO LIFESTYLE DASHBOARD
-              </p>
-            </motion.div>
-
-            {/* Rotating hero text */}
-            <div className="h-20 flex items-center justify-center w-full mt-2">
-              <AnimatePresence mode="wait">
-                <motion.h2
-                  key={heroIdx}
-                  initial={{ opacity: 0, y: 16 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -16 }}
-                  transition={{ duration: 0.5 }}
-                  className="text-3xl font-bold text-white leading-snug drop-shadow-md"
-                  style={{ fontFamily: "'Playfair Display', serif" }}
-                >
-                  {heroLines[heroIdx]}
-                </motion.h2>
-              </AnimatePresence>
-            </div>
+      {/* Center content block: Logo + Title + Rotating text */}
+      <div className="z-10 flex flex-col items-center text-center px-6 max-w-sm mx-auto">
+        {/* Logo */}
+        <motion.div
+          initial={{ opacity: 0, scale: 0.8 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ duration: 0.6, type: "spring", stiffness: 120 }}
+          className="mb-4 relative"
+        >
+          <div className="absolute inset-0 -m-4 rounded-full bg-[#F2E8CF]/15 blur-2xl animate-pulse" />
+          <div className="relative w-20 h-20 bg-[#F2E8CF] rounded-full flex items-center justify-center shadow-2xl shadow-[#F2E8CF]/20 border-4 border-[#F2E8CF]/40">
+            <JarvisLogo size={44} className="text-[#233216]" />
           </div>
+        </motion.div>
 
-          {/* Spacer below hero block to keep it centered/higher */}
-          <div className="flex-1 min-h-[8vh]" />
+        {/* POLYJARVIS logo text */}
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.15 }}
+          className="mb-2"
+        >
+          <h1 className="text-2xl tracking-[0.25em] uppercase font-black drop-shadow-lg font-[system-ui]">
+            <span className="text-white">POLY</span>
+            <span className="text-[#F2E8CF]">JARVIS</span>
+          </h1>
+          <p className="text-[10px] text-white/40 font-bold tracking-[0.2em] uppercase mt-0.5 font-[system-ui]">
+            SAN LUIS OBISPO LIFESTYLE DASHBOARD
+          </p>
+        </motion.div>
 
-          {/* Bottom stack */}
-          <div className="mt-auto w-full flex-shrink-0">
-            {/* CTAs - keep clear spacing near home indicator */}
-            <div className="z-10 w-full px-6 max-w-sm mx-auto space-y-4 mb-10 -translate-y-[2px]">
-              <Link to="/signin">
-                <button className="w-full py-4 bg-white rounded-2xl shadow-xl shadow-white/10 flex items-center justify-center gap-2 active:scale-[0.97] transition-transform">
-                  <span className="text-lg font-bold text-[#1a2e10]">Get Started</span>
-                  <ArrowRight className="text-[#1a2e10]" size={20} />
-                </button>
-              </Link>
-
-              <Link to="/signin" className="block">
-                <button className="w-full py-3.5 bg-white/10 backdrop-blur-sm border border-white/20 rounded-2xl flex items-center justify-center gap-2 active:scale-[0.97] transition-transform">
-                  <User className="text-white/70" size={16} />
-                  <span className="text-white/80 text-sm font-bold">Sign In</span>
-                </button>
-              </Link>
-            </div>
-
-            {/* Marquee prompt pills */}
-            <div className="z-10 w-full overflow-hidden pb-2">
-              <div className="flex mb-1.5">
-                <div className="flex gap-2 shrink-0" style={{ animation: "marquee-left 55s linear infinite" }}>
-                  {marqueeItems.map((pill, i) => (
-                    <span
-                      key={`r1-${i}`}
-                      className="bg-white/12 backdrop-blur-md text-white/80 text-xs font-medium px-4 py-2 rounded-full border border-white/20 whitespace-nowrap"
-                    >
-                      {pill}
-                    </span>
-                  ))}
-                </div>
-              </div>
-              <div className="flex">
-                <div className="flex gap-2 shrink-0" style={{ animation: "marquee-right 60s linear infinite" }}>
-                  {[...marqueeItems].reverse().map((pill, i) => (
-                    <span
-                      key={`r2-${i}`}
-                      className="bg-white/8 backdrop-blur-md text-white/60 text-xs font-medium px-4 py-2 rounded-full border border-white/15 whitespace-nowrap"
-                    >
-                      {pill}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            {/* "ask jarvis..." pinned to bottom of visible stack */}
-            <motion.p
+        {/* Rotating hero text */}
+        <div className="mt-6 mb-2 min-h-[3.5rem] flex items-center justify-center">
+          <AnimatePresence mode="wait">
+            <motion.h2
+              key={heroIdx}
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              transition={{ delay: 1.2 }}
-              className="z-10 text-white/30 text-xs tracking-[0.15em] pb-2 text-center italic"
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.8, ease: "easeInOut" }}
+              className="text-3xl font-black text-white leading-snug drop-shadow-lg"
               style={{ fontFamily: "'Playfair Display', serif" }}
             >
-              ask jarvis...
-            </motion.p>
+              {heroLines[heroIdx]}
+            </motion.h2>
+          </AnimatePresence>
+        </div>
+      </div>
+
+      {/* More spacer */}
+      <div className="flex-1 min-h-[6vh]" />
+
+      {/* CTAs - lower on page */}
+      <div className="z-10 w-full px-6 max-w-sm mx-auto space-y-3 mb-6">
+        <button
+          className="w-full py-4 bg-white rounded-2xl shadow-xl shadow-white/10 flex items-center justify-center gap-2 active:scale-[0.97] transition-transform"
+          onClick={handleGetStarted}
+        >
+          <span className="text-lg font-bold text-[#1a2e10]">Get Started</span>
+          <ArrowRight className="text-[#1a2e10]" size={20} />
+        </button>
+
+        <Link to="/signin" className="block">
+          <button className="w-full py-3.5 bg-white/10 backdrop-blur-sm border border-white/20 rounded-2xl flex items-center justify-center gap-2 active:scale-[0.97] transition-transform">
+            <User className="text-white/70" size={16} />
+            <span className="text-white/80 text-sm font-bold">Sign In</span>
+          </button>
+        </Link>
+      </div>
+
+      {/* Marquee prompt pills */}
+      <div className="z-10 w-screen overflow-hidden pb-2">
+        <div className="flex mb-1.5">
+          <div className="flex gap-2 shrink-0" style={{ animation: "marquee-left 55s linear infinite" }}>
+            {marqueeItems.map((pill, i) => (
+              <span
+                key={`r1-${i}`}
+                className="bg-white/12 backdrop-blur-md text-white/80 text-xs font-medium px-4 py-2 rounded-full border border-white/20 whitespace-nowrap"
+              >
+                {pill}
+              </span>
+            ))}
+          </div>
+        </div>
+        <div className="flex">
+          <div className="flex gap-2 shrink-0" style={{ animation: "marquee-right 60s linear infinite" }}>
+            {[...marqueeItems].reverse().map((pill, i) => (
+              <span
+                key={`r2-${i}`}
+                className="bg-white/8 backdrop-blur-md text-white/60 text-xs font-medium px-4 py-2 rounded-full border border-white/15 whitespace-nowrap"
+              >
+                {pill}
+              </span>
+            ))}
           </div>
         </div>
       </div>
+
+      {/* "ask jarvis..." text below pills */}
+      <motion.p
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 1.2 }}
+        className="z-10 text-white/30 text-xs tracking-[0.15em] pb-[max(16px,env(safe-area-inset-bottom))] italic"
+      >
+        ask jarvis...
+      </motion.p>
 
       <style>{`
         @keyframes marquee-left {
@@ -187,6 +188,48 @@ export function Landing() {
           100% { transform: translateX(0); }
         }
       `}</style>
+
+      {/* Age Gate Modal */}
+      <AnimatePresence>
+        {showAgeGate && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md px-6"
+          >
+            <motion.div
+              initial={{ scale: 0.85, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.85, opacity: 0 }}
+              className="bg-gradient-to-br from-[#1a2e12] to-[#0d1208] border border-[#F2E8CF]/20 p-6 rounded-2xl shadow-2xl w-full max-w-sm text-center"
+            >
+              <div className="w-14 h-14 bg-[#F2E8CF]/15 rounded-full mx-auto flex items-center justify-center mb-4 border border-[#F2E8CF]/25">
+                <span className="text-2xl">🌿</span>
+              </div>
+              <h2 className="text-xl font-black text-white uppercase tracking-wider mb-1">Age Check</h2>
+              <p className="text-xs text-white/40 mb-5">
+                Some SLO spots serve alcohol. Are you 21 or older? This helps us personalize your experience.
+              </p>
+              <div className="flex gap-3">
+                <button
+                  className="flex-1 py-3.5 bg-white/10 border border-white/15 rounded-xl text-white/70 font-bold text-sm active:scale-95 transition-transform"
+                  onClick={() => handleAgeAnswer(false)}
+                >
+                  Under 21
+                </button>
+                <button
+                  className="flex-1 py-3.5 bg-[#F2E8CF] text-[#233216] rounded-xl font-bold text-sm active:scale-95 transition-transform shadow-lg shadow-[#F2E8CF]/15"
+                  onClick={() => handleAgeAnswer(true)}
+                >
+                  21+
+                </button>
+              </div>
+              <p className="text-[9px] text-white/20 mt-3">You can change this later in Settings</p>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

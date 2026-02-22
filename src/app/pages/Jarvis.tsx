@@ -376,6 +376,10 @@ function extractImagePrompt(input: string) {
 }
 
 function detectRestaurantName(input: string): string {
+  const looksLikeTimeOnly = (value: string) =>
+    /^(\d{1,2})(?::\d{2})?\s*(am|pm)?$/i.test(value.trim()) ||
+    /^(tonight|today|tomorrow)(\s+\d{1,2}(?::\d{2})?\s*(am|pm)?)?$/i.test(value.trim());
+
   const q = normalizeInput(input);
   const foodPlaces = places.filter((p) => FOOD_CATEGORIES.has(p.category));
   const match = foodPlaces
@@ -391,7 +395,7 @@ function detectRestaurantName(input: string): string {
       .replace(/\bfor\s+\d+.*$/i, "")
       .replace(/\bat\s+\d.*$/i, "")
       .trim();
-    if (cleaned.length > 1) return cleaned;
+    if (cleaned.length > 1 && !looksLikeTimeOnly(cleaned)) return cleaned;
   }
 
   const generic = input
@@ -401,7 +405,7 @@ function detectRestaurantName(input: string): string {
     .replace(/\b(at|for)\b.*/i, "")
     .trim();
 
-  return generic.length > 1 ? generic : "";
+  return generic.length > 1 && !looksLikeTimeOnly(generic) ? generic : "";
 }
 
 function parsePartySize(input: string): number | null {
@@ -1483,7 +1487,19 @@ export function Jarvis() {
     reservationPollJobRef.current = jobId;
 
     const run = () => {
-      apiFetch(`/api/agent/call/${jobId}`)
+      const fetchJob = async () => {
+        try {
+          return await apiFetch(`/api/agent/call/${jobId}`);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "";
+          if (!/session token/i.test(message)) throw error;
+          const recovered = await recoverBackendSessionToken(true);
+          if (!recovered) throw error;
+          return apiFetch(`/api/agent/call/${jobId}`);
+        }
+      };
+
+      fetchJob()
         .then((data) => {
           const job = data?.call_job;
           if (!job) return;
@@ -1603,7 +1619,7 @@ export function Jarvis() {
               ...prev,
               {
                 role: "assistant",
-                text: `Calling ${pendingReservation.restaurantName} now.\n\nReservation: ${pendingReservation.partySize} people at ${pendingReservation.reservationTime}.\n\nCall job: ${job?.job_id || "created"} (${job?.status || "started"}).\n\nI'll update you here when it is confirmed or declined.`,
+                text: `Calling ${pendingReservation.restaurantName} now.\n\nReservation: ${pendingReservation.partySize} people at ${pendingReservation.reservationTime}.\n\nI'll update you here when it is confirmed or declined.`,
                 timestamp: Date.now(),
               },
             ]);
@@ -2080,7 +2096,7 @@ export function Jarvis() {
   const hasHistory = messages.length > 1;
 
   return (
-    <div className="min-h-[100dvh] flex flex-col bg-transparent pb-16">
+    <div className="h-full flex flex-col bg-transparent overflow-hidden">
       {/* Header */}
       <div className="bg-gradient-to-b from-white/5 to-transparent px-5 pt-2 pb-4 flex-shrink-0">
         <PageHeader />
@@ -2111,7 +2127,7 @@ export function Jarvis() {
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+      <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3">
         {messages.map((msg, idx) => (
           <div key={`${idx}-${msg.timestamp || idx}`}>
             <div className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
