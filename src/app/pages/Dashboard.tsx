@@ -1,6 +1,6 @@
 import { Link, useNavigate } from "react-router";
 import { motion, AnimatePresence } from "motion/react";
-import { Sun, Cloud, CloudRain, CloudSnow, Wind, MapPin, Pin, X, Compass, Car, Bus, Plus, Navigation, HelpCircle, ChevronDown, ChevronUp, Calendar, Clock, Map, Sparkles, Users, ClipboardList, Camera, LocateFixed } from "lucide-react";
+import { Sun, Moon, Cloud, CloudRain, CloudSnow, Wind, MapPin, Pin, X, Compass, Car, Bus, Plus, Navigation, HelpCircle, ChevronDown, ChevronUp, Calendar, Clock, Map, Sparkles, Users, ClipboardList, Camera, LocateFixed } from "lucide-react";
 import { places, getDistanceMiles, CAL_POLY_LAT, CAL_POLY_LNG, Place } from "../data/places";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { toast } from "sonner";
@@ -128,13 +128,24 @@ export function Dashboard() {
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
 
   const [userName, setUserName] = useState("Explorer");
-  const [weather, setWeather] = useState({ temp: 72, condition: "Sunny" });
+  const [weather, setWeather] = useState({ temp: 72, condition: "Sunny", isDay: true });
   const [pinnedEvents, setPinnedEvents] = useState<string[]>([]);
   const [likedIds, setLikedIds] = useState<string[]>([]);
 
   // Work Mode State
   const [tasks, setTasks] = useState<Task[]>([]);
   const [newTaskName, setNewTaskName] = useState("");
+  const [showCanvasModal, setShowCanvasModal] = useState(false);
+  const [canvasTab, setCanvasTab] = useState<"manual" | "canvas">("manual");
+  const [manualTaskName, setManualTaskName] = useState("");
+  const [manualTaskCourse, setManualTaskCourse] = useState("General");
+  const [manualTaskDueDate, setManualTaskDueDate] = useState("Today");
+  const [manualTaskDueTime, setManualTaskDueTime] = useState("");
+  const [manualTaskDuration, setManualTaskDuration] = useState(60);
+  const [canvasToken, setCanvasToken] = useState("");
+  const [showCanvasHowTo, setShowCanvasHowTo] = useState(false);
+  const [canvasStatus, setCanvasStatus] = useState("");
+  const [canvasError, setCanvasError] = useState("");
   const [timerActive, setTimerActive] = useState(false);
   const [timerDuration, setTimerDuration] = useState(25 * 60);
   const [timeLeft, setTimeLeft] = useState(25 * 60);
@@ -183,17 +194,18 @@ export function Dashboard() {
 
   // Live weather from Open-Meteo (free, no key required)
   useEffect(() => {
-    fetch("https://api.open-meteo.com/v1/forecast?latitude=35.28&longitude=-120.66&current=temperature_2m,weather_code&temperature_unit=fahrenheit")
+    fetch("https://api.open-meteo.com/v1/forecast?latitude=35.28&longitude=-120.66&current=temperature_2m,weather_code,is_day&temperature_unit=fahrenheit")
       .then((r) => r.json())
       .then((data) => {
         if (!data?.current) return;
         const temp = Math.round(data.current.temperature_2m);
         const code = Number(data.current.weather_code);
+        const isDay = Number(data.current.is_day) === 1;
         let condition: "Sunny" | "Cloudy" | "Rainy" | "Snowy" | "Windy" = "Sunny";
         if ((code >= 1 && code <= 3) || (code >= 45 && code <= 48)) condition = "Cloudy";
         else if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82) || code >= 95) condition = "Rainy";
         else if (code >= 71 && code <= 77) condition = "Snowy";
-        setWeather({ temp, condition });
+        setWeather({ temp, condition, isDay });
       })
       .catch(() => {
         // Keep fallback weather if API request fails
@@ -386,6 +398,55 @@ export function Dashboard() {
     toast.success("Task added");
   };
 
+  const addManualTaskFromCanvasModal = () => {
+    if (!manualTaskName.trim()) return;
+    const newTask: Task = {
+      id: `manual-${Date.now()}`,
+      course: manualTaskCourse.trim() || "General",
+      name: manualTaskName.trim(),
+      dueTime: manualTaskDueTime.trim() || `${manualTaskDuration} min`,
+      dueDate: manualTaskDueDate.trim() || "Today",
+      priority: false,
+      done: false,
+    };
+    persistTasks([...tasks, newTask]);
+    setManualTaskName("");
+    setManualTaskCourse("General");
+    setManualTaskDueDate("Today");
+    setManualTaskDueTime("");
+    setManualTaskDuration(60);
+    setCanvasStatus("Manual assignment added.");
+    setCanvasError("");
+    toast.success("Assignment added");
+  };
+
+  const connectCanvasFromModal = async () => {
+    setCanvasError("");
+    setCanvasStatus("");
+    const token = canvasToken.trim();
+    if (!token) {
+      setCanvasError("Paste a Canvas token first.");
+      return;
+    }
+    try {
+      const response = await fetch("/api/canvas/connect/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data?.error || "Could not connect Canvas.");
+      }
+      localStorage.setItem("canvas_token", token);
+      setCanvasToken("");
+      setCanvasStatus("Canvas connected. You can now sync assignments.");
+      toast.success("Canvas connected");
+    } catch (error) {
+      setCanvasError(error instanceof Error ? error.message : "Could not connect Canvas.");
+    }
+  };
+
   const toggleTaskDone = (id: string) => {
     persistTasks(tasks.map(t => (t.id === id ? { ...t, done: !t.done } : t)));
   };
@@ -464,7 +525,10 @@ export function Dashboard() {
   }, [exploreView, activeFilter, userPrefs]);
 
   // Jarvis message (personalized when training data exists)
-  const WeatherIcon = weatherIcons[weather.condition] || Sun;
+  const WeatherIcon = !weather.isDay && weather.condition === "Sunny" ? Moon : (weatherIcons[weather.condition] || Sun);
+  const weatherLabel = !weather.isDay && weather.condition === "Sunny" ? "Clear Night" : weather.condition;
+  const weatherPhaseLabel = weather.isDay ? "DAY" : "NIGHT";
+  const weatherPhaseTone = weather.isDay ? "text-[#F2E8CF]" : "text-[#BFD6FF]";
   const baseJarvisMsg = mode === "work"
     ? workMessages[workMsgIdx % workMessages.length](weather.temp)
     : (jarvisMessages.find((m, i) => i === msgIdx && (m.condition === weather.condition || m.condition === "any")) || jarvisMessages[jarvisMessages.length - 1]).msg(weather.temp);
@@ -534,8 +598,10 @@ export function Dashboard() {
           {/* Jarvis Bubble */}
           <div className="flex-1 bg-white/12 border border-[#F2E8CF]/15 rounded-2xl rounded-tl-sm p-3.5 relative backdrop-blur-md">
             <div className="flex items-center gap-2 mb-1.5">
-              <WeatherIcon size={14} className="text-[#F2E8CF]" />
-              <span className="text-[10px] font-bold text-[#F2E8CF] uppercase tracking-wider">{weather.temp}°F · {weather.condition}</span>
+              <WeatherIcon size={14} className={weatherPhaseTone} />
+              <span className={`text-[10px] font-bold uppercase tracking-wider ${weatherPhaseTone}`}>
+                {weather.temp}°F · {weatherLabel} · {weatherPhaseLabel}
+              </span>
             </div>
             <p className="text-sm font-medium leading-relaxed text-white/90">{jarvisMsg}</p>
           </div>
@@ -622,12 +688,26 @@ export function Dashboard() {
             transition={{ duration: 0.15 }}
             className="px-5 pt-2"
           >
-            <h1
-              className="text-3xl font-black text-[#F2E8CF] tracking-tight uppercase mb-4"
-              style={{ fontFamily: "'Playfair Display', serif" }}
-            >
-              LOCK IN.
-            </h1>
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <h1
+                className="text-3xl font-black text-[#F2E8CF] tracking-tight uppercase"
+                style={{ fontFamily: "'Playfair Display', serif" }}
+              >
+                LOCK IN.
+              </h1>
+              <button
+                onClick={() => {
+                  setCanvasTab("manual");
+                  setShowCanvasHowTo(false);
+                  setCanvasStatus("");
+                  setCanvasError("");
+                  setShowCanvasModal(true);
+                }}
+                className="h-11 px-4 rounded-xl font-black text-[10px] uppercase tracking-widest bg-white/8 text-white/80 border border-white/15 active:bg-white/12 active:scale-95 transition-all whitespace-nowrap"
+              >
+                School Assignments
+              </button>
+            </div>
 
             {/* Focus Timer */}
             <div className="bg-white/12 backdrop-blur-sm border border-white/15 rounded-2xl p-5 mb-5 relative overflow-hidden">
@@ -1276,6 +1356,141 @@ export function Dashboard() {
                 </div>
               </>
             )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Canvas / Manual Assignments Modal */}
+      <AnimatePresence>
+        {showCanvasModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[62] bg-white/5 backdrop-blur-md flex items-end sm:items-center justify-center"
+            onClick={() => setShowCanvasModal(false)}
+          >
+            <motion.div
+              initial={{ y: "100%", opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: "100%", opacity: 0 }}
+              transition={{ type: "spring", damping: 24, stiffness: 280 }}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full sm:max-w-md bg-white/10 backdrop-blur-xl border-t border-white/20 sm:border sm:rounded-2xl rounded-t-3xl p-5 shadow-[0_20px_60px_rgba(0,0,0,0.25)]"
+            >
+              <div className="w-10 h-1 bg-white/15 rounded-full mx-auto mb-4 sm:hidden" />
+              <h3 className="text-lg font-black text-white uppercase mb-1">School Assignments</h3>
+              <p className="text-xs text-white/40 mb-3">Add manually or connect Canvas.</p>
+
+              <div className="flex gap-2 mb-3">
+                <button
+                  onClick={() => setCanvasTab("manual")}
+                  className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-all ${
+                    canvasTab === "manual"
+                      ? "bg-[#F2E8CF]/20 text-[#F2E8CF] border-[#F2E8CF]/30"
+                      : "bg-white/8 text-white/55 border-white/12"
+                  }`}
+                >
+                  Manual Entry
+                </button>
+                <button
+                  onClick={() => setCanvasTab("canvas")}
+                  className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-all ${
+                    canvasTab === "canvas"
+                      ? "bg-[#F2E8CF]/20 text-[#F2E8CF] border-[#F2E8CF]/30"
+                      : "bg-white/8 text-white/55 border-white/12"
+                  }`}
+                >
+                  Connect Canvas
+                </button>
+              </div>
+
+              {canvasTab === "manual" ? (
+                <div className="space-y-2.5">
+                  <input
+                    value={manualTaskName}
+                    onChange={(e) => setManualTaskName(e.target.value)}
+                    placeholder="Assignment name"
+                    className="w-full bg-white/8 border border-white/12 rounded-xl px-3 py-2.5 text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-[#F2E8CF]/40"
+                  />
+                  <input
+                    value={manualTaskCourse}
+                    onChange={(e) => setManualTaskCourse(e.target.value)}
+                    placeholder="Course (e.g. CSC 202)"
+                    className="w-full bg-white/8 border border-white/12 rounded-xl px-3 py-2.5 text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-[#F2E8CF]/40"
+                  />
+                  <div className="grid grid-cols-2 gap-2">
+                    <input
+                      value={manualTaskDueDate}
+                      onChange={(e) => setManualTaskDueDate(e.target.value)}
+                      placeholder="Due date (Today)"
+                      className="w-full bg-white/8 border border-white/12 rounded-xl px-3 py-2.5 text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-[#F2E8CF]/40"
+                    />
+                    <input
+                      value={manualTaskDueTime}
+                      onChange={(e) => setManualTaskDueTime(e.target.value)}
+                      placeholder="Due time (8:00 PM)"
+                      className="w-full bg-white/8 border border-white/12 rounded-xl px-3 py-2.5 text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-[#F2E8CF]/40"
+                    />
+                  </div>
+                  <input
+                    type="number"
+                    min={5}
+                    value={manualTaskDuration}
+                    onChange={(e) => setManualTaskDuration(Number(e.target.value) || 60)}
+                    placeholder="Estimated duration (min)"
+                    className="w-full bg-white/8 border border-white/12 rounded-xl px-3 py-2.5 text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-[#F2E8CF]/40"
+                  />
+                  <button
+                    onClick={addManualTaskFromCanvasModal}
+                    className="w-full py-2.5 rounded-xl bg-[#F2E8CF] text-[#233216] text-xs font-black uppercase tracking-wider"
+                  >
+                    Add Assignment
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2.5">
+                  <input
+                    type="password"
+                    value={canvasToken}
+                    onChange={(e) => setCanvasToken(e.target.value)}
+                    placeholder="Paste Canvas API key/token"
+                    className="w-full bg-white/8 border border-white/12 rounded-xl px-3 py-2.5 text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-[#F2E8CF]/40"
+                  />
+                  <button
+                    onClick={connectCanvasFromModal}
+                    className="w-full py-2.5 rounded-xl bg-[#F2E8CF] text-[#233216] text-xs font-black uppercase tracking-wider"
+                  >
+                    Connect to Canvas
+                  </button>
+                  <button
+                    onClick={() => setShowCanvasHowTo((v) => !v)}
+                    className="w-full py-2.5 rounded-xl bg-white/8 border border-white/12 text-white/70 text-xs font-black uppercase tracking-wider"
+                  >
+                    {showCanvasHowTo ? "Hide How To" : "How To Find Canvas Key"}
+                  </button>
+                  {showCanvasHowTo && (
+                    <div className="rounded-xl border border-white/12 bg-white/5 p-3 text-xs text-white/70 space-y-1">
+                      <p>1. Open Canvas and sign in.</p>
+                      <p>2. Go to Account -&gt; Settings.</p>
+                      <p>3. Scroll to Approved Integrations.</p>
+                      <p>4. Click + New Access Token.</p>
+                      <p>5. Copy token and paste it above.</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {canvasStatus && <p className="mt-3 text-xs font-bold text-[#8BC34A]">{canvasStatus}</p>}
+              {canvasError && <p className="mt-3 text-xs font-bold text-red-400">{canvasError}</p>}
+
+              <button
+                onClick={() => setShowCanvasModal(false)}
+                className="mt-3 w-full py-2.5 rounded-xl bg-white/5 border border-white/10 text-white/45 text-xs font-bold"
+              >
+                CLOSE
+              </button>
+            </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
