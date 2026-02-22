@@ -15,6 +15,7 @@
     "preview": "vite preview",
     "ios": "npm run cap:sync:ios",
     "ios:dev": "node scripts/ios-dev.mjs",
+    "ios:iphone": "node scripts/ios-dev.mjs",
     "cap:sync": "npm run build && npx cap sync",
     "cap:sync:ios": "npm run build && npx cap sync ios",
     "cap:open:ios": "npx cap open ios",

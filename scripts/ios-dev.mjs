@@ -87,7 +87,16 @@ async function main() {
 
   console.log("[ios:dev] running iOS sync...");
   await run("npm", ["run", "ios"]);
-  console.log("[ios:dev] iOS sync complete. Dev services are still running. Press Ctrl+C to stop.");
+  const workspacePath = path.join(rootDir, "ios", "App", "App.xcworkspace");
+  if (fs.existsSync(workspacePath)) {
+    console.log("[ios:dev] iOS sync complete.");
+    console.log(`[ios:dev] open Xcode workspace: open "${workspacePath}"`);
+    console.log(`[ios:dev] verify API health in browser: ${apiBase}/health`);
+  } else {
+    console.log("[ios:dev] iOS sync complete, but ios/App/App.xcworkspace was not found.");
+    console.log("[ios:dev] run: npx cap add ios");
+  }
+  console.log("[ios:dev] Dev services are still running. Press Ctrl+C to stop.");
 }
 
 main().catch((error) => {

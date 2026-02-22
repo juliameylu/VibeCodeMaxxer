@@ -309,9 +309,29 @@ export function Plans() {
   }, []);
 
   useEffect(() => {
-    refreshPlansFromBackend();
+    const refreshIfVisible = () => {
+      if (!document.hidden) refreshPlansFromBackend();
+    };
+
+    refreshIfVisible();
     const interval = window.setInterval(refreshPlansFromBackend, 10000);
-    return () => window.clearInterval(interval);
+    const onPlansUpdated = () => {
+      refreshPlansFromBackend();
+    };
+
+    window.addEventListener("polyjarvis:plans-updated", onPlansUpdated);
+    window.addEventListener("focus", refreshIfVisible);
+    window.addEventListener("pageshow", refreshIfVisible);
+    document.addEventListener("visibilitychange", refreshIfVisible);
+    document.addEventListener("resume", refreshIfVisible as EventListener);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("polyjarvis:plans-updated", onPlansUpdated);
+      window.removeEventListener("focus", refreshIfVisible);
+      window.removeEventListener("pageshow", refreshIfVisible);
+      document.removeEventListener("visibilitychange", refreshIfVisible);
+      document.removeEventListener("resume", refreshIfVisible as EventListener);
+    };
   }, [refreshPlansFromBackend]);
 
   // Handle incoming state (including Jarvis plan templates and Jam imports)

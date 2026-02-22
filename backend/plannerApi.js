@@ -378,39 +378,44 @@ function parseReservationStartTimestamp(reservationTimeText) {
 }
 
 async function persistCallConfirmationArtifacts(job) {
-  if (!job || !canUseSupabaseRest()) return { reservationId: "", planId: "" };
+  if (!job) return { reservationId: "", planId: "" };
   const owner = store.users.get(job.user_id);
   if (!owner) return { reservationId: "", planId: "" };
-  await ensureSupabaseProfile(owner);
+  const shouldSyncSupabase = canUseSupabaseRest();
+  if (shouldSyncSupabase) {
+    await ensureSupabaseProfile(owner);
+  }
   const supabaseOwnerId = getSupabaseUserId(owner);
 
   const startTs = parseReservationStartTimestamp(job.reservation_time);
   const endTs = new Date(new Date(startTs).getTime() + 90 * 60 * 1000).toISOString();
   const reservationId = String(job.confirmed_reservation_id || `call_${job.job_id}`);
 
-  await supabaseRest("/restaurant_reservations", {
-    method: "POST",
-    prefer: "resolution=merge-duplicates,return=minimal",
-    body: {
-      id: job.job_id,
-      user_id: supabaseOwnerId,
-      reservation_id: reservationId,
-      restaurant_entity_id: `call:${job.job_id}`,
-      restaurant_name: String(job.restaurant_name || "Restaurant"),
-      slot_id: `call_slot_${String(job.job_id || "").slice(0, 8)}`,
-      start_ts: startTs,
-      end_ts: endTs,
-      party_size: Number(job.party_size || 2),
-      special_requests: job.special_request ? [String(job.special_request)] : [],
-      notes: `Confirmed by phone call${job.target_number ? ` to ${job.target_number}` : ""}`,
-      status: "confirmed",
-      provider: "twilio",
-      source: "voice_call",
-      reservation_url: null,
-      cancellation_policy: null,
-      updated_at: NOW().toISOString()
-    }
-  });
+  if (shouldSyncSupabase) {
+    await supabaseRest("/restaurant_reservations", {
+      method: "POST",
+      prefer: "resolution=merge-duplicates,return=minimal",
+      body: {
+        id: job.job_id,
+        user_id: supabaseOwnerId,
+        reservation_id: reservationId,
+        restaurant_entity_id: `call:${job.job_id}`,
+        restaurant_name: String(job.restaurant_name || "Restaurant"),
+        slot_id: `call_slot_${String(job.job_id || "").slice(0, 8)}`,
+        start_ts: startTs,
+        end_ts: endTs,
+        party_size: Number(job.party_size || 2),
+        special_requests: job.special_request ? [String(job.special_request)] : [],
+        notes: `Confirmed by phone call${job.target_number ? ` to ${job.target_number}` : ""}`,
+        status: "confirmed",
+        provider: "twilio",
+        source: "voice_call",
+        reservation_url: null,
+        cancellation_policy: null,
+        updated_at: NOW().toISOString()
+      }
+    });
+  }
 
   const createdPlan = {
     id: randomUUID(),
@@ -452,7 +457,9 @@ async function persistCallConfirmationArtifacts(job) {
   };
 
   store.plans.unshift(createdPlan);
-  await persistPlanToSupabase(createdPlan);
+  if (shouldSyncSupabase) {
+    await persistPlanToSupabase(createdPlan);
+  }
   markStoreDirty();
   return { reservationId, planId: createdPlan.id };
 }

@@ -9,10 +9,12 @@ import { toast } from "sonner";
 import { getUserPreferences, getPersonalizedRecommendation, getPreferenceScore } from "../utils/preferences";
 import { places, getDistanceMiles, CAL_POLY_LAT, CAL_POLY_LNG, getPlaceEmoji, type Place } from "../data/places";
 import { apiFetch } from "../../lib/apiClient";
+import { supabase } from "/utils/supabase/client";
 
 const MESSAGES_KEY = "polyjarvis_chat_history";
 const HOME_LOCATION_KEY = "polyjarvis_home_location";
 const RESERVATION_STATUS_KEY = "polyjarvis_reservation_statuses";
+const PLANS_KEY = "polyjarvis_plans";
 const USER_ID_KEY = "slo_user_id";
 
 const promptPills = [
@@ -1332,6 +1334,64 @@ function upsertReservationStatus(next: ReservationStatusRecord) {
   localStorage.setItem(RESERVATION_STATUS_KEY, JSON.stringify(filtered.slice(0, 25)));
 }
 
+function appendConfirmedReservationPlan(rawJob: any) {
+  const restaurant = String(rawJob?.restaurant_name || "Restaurant");
+  const reservationTime = String(rawJob?.reservation_time || "requested time");
+  const partySize = Number(rawJob?.party_size || 2);
+  const planId = String(rawJob?.confirmed_plan_id || `plan-call-${rawJob?.job_id || Date.now()}`);
+  const eventId = `evt-${rawJob?.job_id || Date.now()}`;
+
+  const plan = {
+    id: planId,
+    name: `Reservation: ${restaurant}`,
+    icon: "Utensils",
+    date: new Date().toLocaleDateString([], { month: "short", day: "numeric" }),
+    type: "event",
+    events: [
+      {
+        id: eventId,
+        name: `Table for ${partySize} at ${restaurant}`,
+        source: "custom",
+        icon: "Utensils",
+        time: reservationTime,
+        location: "Restaurant confirmed by phone",
+        note: rawJob?.special_request || "",
+      },
+    ],
+    shareCode: String(planId).slice(0, 8).toUpperCase(),
+    createdAt: "Just now",
+    notes: rawJob?.special_request || undefined,
+  };
+
+  try {
+    const raw = localStorage.getItem(PLANS_KEY);
+    const existing = raw ? JSON.parse(raw) : [];
+    const next = Array.isArray(existing)
+      ? [plan, ...existing.filter((item: any) => String(item?.id || "") !== planId)]
+      : [plan];
+    localStorage.setItem(PLANS_KEY, JSON.stringify(next.slice(0, 100)));
+  } catch {
+    localStorage.setItem(PLANS_KEY, JSON.stringify([plan]));
+  }
+
+  window.dispatchEvent(new CustomEvent("polyjarvis:plans-updated", { detail: { planId } }));
+}
+
+function isFinalReservationStatus(status: string, decision: string) {
+  const normalizedStatus = String(status || "").toLowerCase();
+  const normalizedDecision = String(decision || "").toLowerCase();
+  return (
+    normalizedDecision === "confirmed" ||
+    normalizedDecision === "declined" ||
+    normalizedDecision === "declined-timeout" ||
+    normalizedStatus === "reservation-confirmed" ||
+    normalizedStatus === "reservation-declined" ||
+    normalizedStatus === "reservation-timeout" ||
+    normalizedStatus === "failed" ||
+    (normalizedStatus === "completed" && !normalizedDecision)
+  );
+}
+
 async function recoverBackendSessionToken(forceRenew = false): Promise<string | null> {
   if (forceRenew) {
     localStorage.removeItem("slo_session_token");
@@ -1403,6 +1463,7 @@ export function Jarvis() {
   const [clarification, setClarification] = useState<ClarificationState | null>(null);
   const [recommendationMemory, setRecommendationMemory] = useState<RecommendationMemory | null>(null);
   const [pendingReservation, setPendingReservation] = useState<ReservationDraft | null>(null);
+  const [activeReservationJobId, setActiveReservationJobId] = useState("");
   const [keyboardOpen, setKeyboardOpen] = useState(false);
   const [keyboardInset, setKeyboardInset] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -1410,6 +1471,54 @@ export function Jarvis() {
   const reservationPollRef = useRef<number | null>(null);
   const reservationPollJobRef = useRef<string>("");
   const reservationFinalNotifiedRef = useRef<Record<string, boolean>>({});
+  const reservationPollRunnerRef = useRef<(() => void) | null>(null);
+  const reservationPollErrorCountRef = useRef(0);
+  const reservationJobRestaurantRef = useRef<Record<string, string>>({});
+
+  const applyReservationJobUpdate = useCallback((jobId: string, rawJob: any, fallbackRestaurantName = "") => {
+    const status = String(rawJob?.status || "").toLowerCase();
+    const decision = String(rawJob?.reservation_decision || "").toLowerCase();
+    const restaurant = String(rawJob?.restaurant_name || fallbackRestaurantName || "the restaurant");
+
+    upsertReservationStatus({
+      jobId,
+      restaurantName: restaurant,
+      reservationTime: String(rawJob?.reservation_time || ""),
+      partySize: Number(rawJob?.party_size || 0),
+      status,
+      decision,
+      updatedAt: Date.now(),
+    });
+
+    const isFinal = isFinalReservationStatus(status, decision);
+    if (!isFinal || reservationFinalNotifiedRef.current[jobId]) return;
+    reservationFinalNotifiedRef.current[jobId] = true;
+
+    let text = `Reservation update for ${restaurant}: still in progress.`;
+    if (decision === "confirmed" || status === "reservation-confirmed") {
+      text = "Reservation has been confirmed.";
+      appendConfirmedReservationPlan(rawJob);
+      if (rawJob?.confirmed_plan_id) {
+        text += "\n\nI added this confirmed reservation to your Plans.";
+      }
+    } else if (decision === "declined" || status === "reservation-declined") {
+      text = `Reservation declined by ${restaurant}. Want me to try a different time?`;
+    } else if (decision === "declined-timeout" || status === "reservation-timeout") {
+      text = `No confirmation input received from ${restaurant}. Want me to retry with another time?`;
+    } else if (status === "failed") {
+      text = `The call to ${restaurant} failed. ${rawJob?.last_error ? `Reason: ${rawJob.last_error}` : ""}`.trim();
+    } else if (status === "completed" && !decision) {
+      text = `The call to ${restaurant} ended, but no keypad confirmation was captured.`;
+    }
+
+    setMessages((prev) => [...prev, { role: "assistant", text, timestamp: Date.now() }]);
+
+    if (reservationPollRef.current && reservationPollJobRef.current === jobId) {
+      window.clearInterval(reservationPollRef.current);
+      reservationPollRef.current = null;
+      setActiveReservationJobId("");
+    }
+  }, []);
 
   // Persist messages whenever they change
   useEffect(() => {
@@ -1469,6 +1578,23 @@ export function Jarvis() {
     };
   }, []);
   useEffect(() => {
+    const refreshLiveCallStatus = () => {
+      if (!document.hidden && reservationPollRunnerRef.current) {
+        reservationPollRunnerRef.current();
+      }
+    };
+    window.addEventListener("focus", refreshLiveCallStatus);
+    window.addEventListener("pageshow", refreshLiveCallStatus);
+    document.addEventListener("visibilitychange", refreshLiveCallStatus);
+    document.addEventListener("resume", refreshLiveCallStatus as EventListener);
+    return () => {
+      window.removeEventListener("focus", refreshLiveCallStatus);
+      window.removeEventListener("pageshow", refreshLiveCallStatus);
+      document.removeEventListener("visibilitychange", refreshLiveCallStatus);
+      document.removeEventListener("resume", refreshLiveCallStatus as EventListener);
+    };
+  }, []);
+  useEffect(() => {
     const syncHistoryFromAuth = () => {
       const saved = loadMessages();
       if (saved.length > 0) {
@@ -1499,6 +1625,9 @@ export function Jarvis() {
       reservationPollRef.current = null;
     }
     reservationPollJobRef.current = jobId;
+    setActiveReservationJobId(jobId);
+    reservationJobRestaurantRef.current[jobId] = restaurantName;
+    reservationPollErrorCountRef.current = 0;
 
     const run = () => {
       const fetchJob = async () => {
@@ -1517,60 +1646,62 @@ export function Jarvis() {
         .then((data) => {
           const job = data?.call_job;
           if (!job) return;
-
-          const status = String(job.status || "").toLowerCase();
-          const decision = String(job.reservation_decision || "").toLowerCase();
-          upsertReservationStatus({
-            jobId,
-            restaurantName: job.restaurant_name || restaurantName,
-            reservationTime: job.reservation_time || "",
-            partySize: Number(job.party_size || 0),
-            status,
-            decision,
-            updatedAt: Date.now(),
-          });
-
-          const isFinal =
-            decision === "confirmed" ||
-            decision === "declined" ||
-            decision === "declined-timeout" ||
-            status === "reservation-confirmed" ||
-            status === "reservation-declined" ||
-            status === "reservation-timeout" ||
-            status === "failed";
-
-          if (!isFinal || reservationFinalNotifiedRef.current[jobId]) return;
-
-          reservationFinalNotifiedRef.current[jobId] = true;
-          let text = `Reservation update for ${job.restaurant_name || restaurantName}: still in progress.`;
-          if (decision === "confirmed" || status === "reservation-confirmed") {
-            text = `Reservation confirmed at ${job.restaurant_name || restaurantName} for ${job.party_size || "?"} at ${job.reservation_time || "requested time"}.`;
-            if (job.confirmed_plan_id) {
-              text += "\n\nI added this confirmed reservation to your Plans.";
-            }
-          } else if (decision === "declined" || status === "reservation-declined") {
-            text = `Reservation declined by ${job.restaurant_name || restaurantName}. Want me to try a different time?`;
-          } else if (decision === "declined-timeout" || status === "reservation-timeout") {
-            text = `No confirmation input received from ${job.restaurant_name || restaurantName}. Want me to retry with another time?`;
-          } else if (status === "failed") {
-            text = `The call to ${job.restaurant_name || restaurantName} failed. ${job.last_error ? `Reason: ${job.last_error}` : ""}`.trim();
-          }
-
-          setMessages((prev) => [...prev, { role: "assistant", text, timestamp: Date.now() }]);
-
-          if (reservationPollRef.current && reservationPollJobRef.current === jobId) {
-            window.clearInterval(reservationPollRef.current);
-            reservationPollRef.current = null;
-          }
+          reservationPollErrorCountRef.current = 0;
+          applyReservationJobUpdate(jobId, job, restaurantName);
         })
-        .catch(() => {
-          // Keep polling; transient errors are common while backend updates call state.
+        .catch((error) => {
+          reservationPollErrorCountRef.current += 1;
+          if (reservationPollErrorCountRef.current >= 2) {
+            const message = error instanceof Error ? error.message : "Could not refresh call status.";
+            setMessages((prev) => [...prev, {
+              role: "assistant",
+              text: `Call update is delayed right now: ${message}. I'll keep trying in the background.`,
+              timestamp: Date.now(),
+            }]);
+            reservationPollErrorCountRef.current = 0;
+          }
         });
     };
 
+    reservationPollRunnerRef.current = run;
     run();
-    reservationPollRef.current = window.setInterval(run, 7000);
-  }, []);
+    reservationPollRef.current = window.setInterval(run, 4000);
+  }, [applyReservationJobUpdate]);
+
+  useEffect(() => {
+    const records = loadReservationStatuses();
+    const latestActive = records.find((row) => !isFinalReservationStatus(row.status, row.decision));
+    if (!latestActive || !latestActive.jobId) return;
+    startReservationPolling(latestActive.jobId, latestActive.restaurantName || "Restaurant");
+  }, [startReservationPolling]);
+
+  useEffect(() => {
+    const activeJobId = activeReservationJobId;
+    if (!activeJobId) return;
+
+    const channel = supabase
+      .channel(`reservation-call-job-${activeJobId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "reservation_call_jobs",
+          filter: `id=eq.${activeJobId}`,
+        },
+        (payload: any) => {
+          const row = payload?.new || payload?.record;
+          if (!row) return;
+          const fallbackRestaurant = reservationJobRestaurantRef.current[activeJobId] || "";
+          applyReservationJobUpdate(activeJobId, row, fallbackRestaurant);
+        },
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [activeReservationJobId, applyReservationJobUpdate]);
 
   const sendMessage = useCallback((text: string) => {
     if (!text.trim()) return;
@@ -1636,7 +1767,7 @@ export function Jarvis() {
               ...prev,
               {
                 role: "assistant",
-                text: `Calling ${pendingReservation.restaurantName} now.\n\nReservation: ${pendingReservation.partySize} people at ${pendingReservation.reservationTime}.\n\nI'll update you here when it is confirmed or declined.`,
+                text: `Calling ${pendingReservation.restaurantName} now.\n\nReservation: ${pendingReservation.partySize} people at ${pendingReservation.reservationTime}.`,
                 timestamp: Date.now(),
               },
             ]);
