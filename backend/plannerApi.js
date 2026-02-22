@@ -170,6 +170,46 @@ const DUMMY_USER_SEEDS = [
   },
 ];
 
+const DUMMY_USER_IDS = {
+  faith: "6f0f8e72-8717-4b8d-a2ea-e2dca4e5f111",
+  maria: "61fbbf57-b7c6-4ddd-aa9f-caf3afba2222",
+  devin: "3f1b578d-51e6-4f84-b0f5-9cf6d4dc3333",
+};
+
+const PREDEFINED_SLOT_TEMPLATES_BY_USER = {
+  [DUMMY_USER_IDS.faith]: [
+    { dayOffset: 1, start: "17:30", end: "19:00" },
+    { dayOffset: 1, start: "20:15", end: "22:00" },
+    { dayOffset: 2, start: "18:00", end: "20:30" },
+  ],
+  [DUMMY_USER_IDS.maria]: [
+    { dayOffset: 1, start: "18:15", end: "19:45" },
+    { dayOffset: 1, start: "20:30", end: "22:15" },
+    { dayOffset: 2, start: "18:45", end: "20:45" },
+  ],
+  [DUMMY_USER_IDS.devin]: [
+    { dayOffset: 1, start: "17:45", end: "18:45" },
+    { dayOffset: 1, start: "20:00", end: "21:15" },
+    { dayOffset: 2, start: "19:15", end: "21:15" },
+  ],
+};
+
+const PRESEEDED_FRIEND_GRAPH = {
+  [DUMMY_USER_IDS.faith]: [DUMMY_USER_IDS.maria, DUMMY_USER_IDS.devin],
+  [DUMMY_USER_IDS.maria]: [DUMMY_USER_IDS.faith],
+  [DUMMY_USER_IDS.devin]: [DUMMY_USER_IDS.faith],
+};
+
+const PRESEEDED_CANVAS_LINK_DATA_BY_USER = {
+  [DUMMY_USER_IDS.faith]: {
+    connected: true,
+    mode: "manual",
+    instance_url: "https://canvas.calpoly.edu",
+    token_hint: "demo...faith",
+    linked_at: "2026-02-01T18:00:00.000Z",
+  },
+};
+
 function normalizePartySize(value) {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed) || parsed < 1 || parsed > 20) return null;
@@ -240,6 +280,243 @@ function hashString(value) {
     hash |= 0;
   }
   return Math.abs(hash);
+}
+
+function normalizeUuidArray(values, selfUserId = "") {
+  if (!Array.isArray(values)) return [];
+  const selfId = String(selfUserId || "").trim();
+  const dedup = new Set();
+  values.forEach((value) => {
+    const id = String(value || "").trim();
+    if (!isUuid(id) || !id || id === selfId) return;
+    dedup.add(id);
+  });
+  return [...dedup];
+}
+
+function defaultFriendUserIdsForUser(userId) {
+  return normalizeUuidArray(PRESEEDED_FRIEND_GRAPH[userId] || [], userId);
+}
+
+function normalizeJarvisChatData(value) {
+  const source = value && typeof value === "object" ? value : {};
+  const messages = Array.isArray(source.messages) ? source.messages : [];
+
+  const normalizedMessages = messages
+    .map((message, index) => {
+      const role = message?.role === "user" ? "user" : "assistant";
+      const text = String(message?.text || "").trim();
+      if (!text) return null;
+      const timestamp = Number.isFinite(Number(message?.timestamp))
+        ? Number(message.timestamp)
+        : Date.now() + index;
+      return { role, text, timestamp };
+    })
+    .filter(Boolean)
+    .slice(-200);
+
+  return {
+    messages: normalizedMessages,
+    updated_at: source?.updated_at || NOW().toISOString(),
+    version: Number.isFinite(Number(source?.version)) ? Number(source.version) : 1,
+  };
+}
+
+function normalizeCanvasMode(value) {
+  const mode = String(value || "").trim().toLowerCase();
+  if (mode === "manual" || mode === "oauth") return mode;
+  return null;
+}
+
+function normalizeCanvasInstanceUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+
+  try {
+    const withProtocol = raw.includes("://") ? raw : `https://${raw}`;
+    const parsed = new URL(withProtocol);
+    return `${parsed.protocol}//${parsed.hostname}`;
+  } catch {
+    return null;
+  }
+}
+
+function tokenHintFromCanvasToken(token) {
+  const value = String(token || "").trim().replace(/\s+/g, "");
+  if (!value) return null;
+  if (value.length <= 8) return `${value.slice(0, 2)}***`;
+  return `${value.slice(0, 4)}...${value.slice(-4)}`;
+}
+
+function normalizeCanvasLinkData(value, fallback = {}) {
+  const source = value && typeof value === "object" ? value : {};
+  const fallbackSource = fallback && typeof fallback === "object" ? fallback : {};
+  const connected = source.connected ?? fallbackSource.connected;
+  const mode = normalizeCanvasMode(source.mode || fallbackSource.mode);
+  const instanceUrl = normalizeCanvasInstanceUrl(source.instance_url || fallbackSource.instance_url);
+  const tokenHint = String(source.token_hint || fallbackSource.token_hint || "").trim() || null;
+  const linkedAt = toIsoOrNull(source.linked_at || fallbackSource.linked_at || "");
+
+  return {
+    connected: Boolean(connected),
+    mode,
+    instance_url: instanceUrl,
+    token_hint: tokenHint ? tokenHint.slice(0, 32) : null,
+    linked_at: Boolean(connected) ? linkedAt || NOW().toISOString() : null,
+    updated_at: NOW().toISOString(),
+  };
+}
+
+function parseClockText(clockText) {
+  const text = String(clockText || "").trim();
+  const match = text.match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return { hour: 18, minute: 0 };
+  const hour = Math.max(0, Math.min(23, Number(match[1])));
+  const minute = Math.max(0, Math.min(59, Number(match[2])));
+  return { hour, minute };
+}
+
+const FALLBACK_SLOT_TEMPLATE_POOL = [
+  { dayOffset: 1, start: "17:00", end: "18:30" },
+  { dayOffset: 1, start: "18:30", end: "20:00" },
+  { dayOffset: 1, start: "20:00", end: "21:30" },
+  { dayOffset: 2, start: "17:30", end: "19:00" },
+  { dayOffset: 2, start: "19:00", end: "20:30" },
+  { dayOffset: 2, start: "20:30", end: "22:00" },
+  { dayOffset: 3, start: "18:00", end: "19:45" },
+  { dayOffset: 3, start: "20:00", end: "21:45" },
+];
+
+function fallbackSlotTemplatesForUser(userId) {
+  const seed = hashString(String(userId || "fallback"));
+  const used = new Set();
+  const templates = [];
+  for (let i = 0; i < 3; i += 1) {
+    const index = (seed + i * 3) % FALLBACK_SLOT_TEMPLATE_POOL.length;
+    if (used.has(index)) continue;
+    used.add(index);
+    templates.push(FALLBACK_SLOT_TEMPLATE_POOL[index]);
+  }
+  return templates.length > 0 ? templates : FALLBACK_SLOT_TEMPLATE_POOL.slice(0, 3);
+}
+
+function buildMockCalendarDataFromTemplates(userId, timezone = DEFAULT_TIMEZONE, templates = []) {
+  const now = NOW();
+  const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const inputTemplates = Array.isArray(templates) && templates.length > 0
+    ? templates
+    : fallbackSlotTemplatesForUser(userId);
+
+  const windows = inputTemplates.map((template, index) => {
+    const start = new Date(dayStart);
+    start.setUTCDate(start.getUTCDate() + Math.max(0, Number(template?.dayOffset || 1)));
+    const startClock = parseClockText(template?.start || "18:00");
+    start.setUTCHours(startClock.hour, startClock.minute, 0, 0);
+
+    const end = new Date(dayStart);
+    end.setUTCDate(end.getUTCDate() + Math.max(0, Number(template?.dayOffset || 1)));
+    const endClock = parseClockText(template?.end || "19:30");
+    end.setUTCHours(endClock.hour, endClock.minute, 0, 0);
+    if (end.getTime() <= start.getTime()) {
+      end.setUTCDate(end.getUTCDate() + 1);
+    }
+
+    return {
+      window_id: `${String(userId).slice(0, 8)}_slot_${index + 1}`,
+      start_ts: start.toISOString(),
+      end_ts: end.toISOString(),
+      source: "predefined_mock_slots",
+    };
+  });
+
+  return {
+    version: 1,
+    source: "predefined_mock_slots",
+    timezone: normalizeTimezone(timezone),
+    availability_windows: windows,
+    updated_at: NOW().toISOString(),
+  };
+}
+
+function normalizeMockCalendarData(value, userId, timezone = DEFAULT_TIMEZONE) {
+  const source = value && typeof value === "object" ? value : {};
+  const windowsInput = Array.isArray(source.availability_windows) ? source.availability_windows : [];
+
+  const normalizedWindows = windowsInput
+    .map((window, index) => {
+      const startTs = toIsoOrNull(window?.start_ts || window?.start_at || "");
+      const endTs = toIsoOrNull(window?.end_ts || window?.end_at || "");
+      if (!startTs || !endTs) return null;
+      if (new Date(endTs).getTime() <= new Date(startTs).getTime()) return null;
+      return {
+        window_id: String(window?.window_id || `${String(userId).slice(0, 8)}_slot_${index + 1}`),
+        start_ts: startTs,
+        end_ts: endTs,
+        source: String(window?.source || "predefined_mock_slots"),
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => new Date(a.start_ts).getTime() - new Date(b.start_ts).getTime());
+
+  if (normalizedWindows.length === 0) {
+    const templates = PREDEFINED_SLOT_TEMPLATES_BY_USER[userId] || fallbackSlotTemplatesForUser(userId);
+    return buildMockCalendarDataFromTemplates(userId, timezone, templates);
+  }
+
+  return {
+    version: Number.isFinite(Number(source.version)) ? Number(source.version) : 1,
+    source: String(source.source || "predefined_mock_slots"),
+    timezone: normalizeTimezone(source.timezone || timezone || DEFAULT_TIMEZONE),
+    availability_windows: normalizedWindows,
+    updated_at: source.updated_at || NOW().toISOString(),
+  };
+}
+
+function ensureUserProfileMockData(user, timezone = DEFAULT_TIMEZONE) {
+  if (!user) return null;
+  user.timezone = normalizeTimezone(timezone || user.timezone || DEFAULT_TIMEZONE);
+  const seededFriends = defaultFriendUserIdsForUser(user.id);
+  const seededCanvas = PRESEEDED_CANVAS_LINK_DATA_BY_USER[user.id] || {};
+  const rawFriends = Array.isArray(user.mock_friend_user_ids) && user.mock_friend_user_ids.length > 0
+    ? user.mock_friend_user_ids
+    : seededFriends;
+  user.mock_friend_user_ids = normalizeUuidArray(rawFriends, user.id);
+  user.mock_calendar_data_json = normalizeMockCalendarData(user.mock_calendar_data_json, user.id, user.timezone);
+  user.jarvis_chat_data_json = normalizeJarvisChatData(user.jarvis_chat_data_json);
+  user.canvas_link_data_json = normalizeCanvasLinkData(user.canvas_link_data_json, seededCanvas);
+  return user;
+}
+
+function mockCalendarDataToAvailabilityRows(userId, mockCalendarData) {
+  const windows = Array.isArray(mockCalendarData?.availability_windows)
+    ? mockCalendarData.availability_windows
+    : [];
+  return windows.map((window) => ({
+    id: randomUUID(),
+    user_id: userId,
+    start_at: String(window.start_ts),
+    end_at: String(window.end_ts),
+    source: String(window.source || "predefined_mock_slots"),
+    created_at: NOW().toISOString(),
+  }));
+}
+
+function mockCalendarDataToEventRows(userId, mockCalendarData, timezone = DEFAULT_TIMEZONE) {
+  const windows = Array.isArray(mockCalendarData?.availability_windows)
+    ? mockCalendarData.availability_windows
+    : [];
+  return windows.map((window, index) => ({
+    id: `mock_cal_evt_${Math.abs(hashString(`${userId}_${window.start_ts}_${index}`))
+      .toString(36)
+      .slice(0, 10)}`,
+    user_id: userId,
+    title: `Available Window ${index + 1}`,
+    location: "SLO",
+    start_at: String(window.start_ts),
+    end_at: String(window.end_ts),
+    source: "predefined_mock_slots",
+    timezone: normalizeTimezone(timezone),
+  }));
 }
 
 function toIsoOrNull(value) {
@@ -338,8 +615,10 @@ function ensureStoreUserFromContext({
     user.display_name = normalizeDisplayName(displayName || user.display_name, user.email);
     user.cal_poly_email = user.email.endsWith("@calpoly.edu") ? user.email : "";
     user.onboarding_complete = Boolean(user.onboarding_complete || onboardingComplete);
+    user.timezone = normalizeTimezone(timezone || user.timezone || DEFAULT_TIMEZONE);
     if (!user.password && password) user.password = String(password);
     if (!user.created_at) user.created_at = NOW().toISOString();
+    ensureUserProfileMockData(user, user.timezone);
     return user;
   }
 
@@ -355,12 +634,38 @@ function ensureStoreUserFromContext({
     created_at: NOW().toISOString(),
     password: String(password || `mock-${resolvedUserId}`),
     timezone: normalizeTimezone(timezone),
+    mock_calendar_data_json: null,
+    jarvis_chat_data_json: { messages: [], updated_at: NOW().toISOString(), version: 1 },
+    canvas_link_data_json: PRESEEDED_CANVAS_LINK_DATA_BY_USER[resolvedUserId] || null,
+    mock_friend_user_ids: defaultFriendUserIdsForUser(resolvedUserId),
   };
 
+  ensureUserProfileMockData(next, next.timezone);
   store.users.set(next.id, next);
   getOrInitPreferences(next.id);
   getOrInitConnections(next.id);
   return next;
+}
+
+function localMockEmailForUserId(userId) {
+  const normalized = String(userId || "").replace(/[^a-z0-9._-]/gi, "").slice(0, 24);
+  return `${normalized || "user"}@local.mock`;
+}
+
+function ensureStoreUserById(userId, { displayName = "Local User", timezone = DEFAULT_TIMEZONE } = {}) {
+  const normalizedUserId = String(userId || "").trim();
+  if (!normalizedUserId) return null;
+
+  return (
+    store.users.get(normalizedUserId)
+    || ensureStoreUserFromContext({
+      userId: normalizedUserId,
+      email: localMockEmailForUserId(normalizedUserId),
+      displayName,
+      timezone: normalizeTimezone(timezone || DEFAULT_TIMEZONE),
+      onboardingComplete: true,
+    })
+  );
 }
 
 function getAppContextFromRequest(req) {
@@ -522,44 +827,14 @@ function mergePreferencePayload(userId, payload = {}) {
 }
 
 function generateMockCalendarEventsForUser(userId, timezone = DEFAULT_TIMEZONE) {
-  const seed = hashString(`${userId}_${timezone}`);
-  const now = NOW();
-  const templates = [
-    { title: "CS Study Group", location: "Kennedy Library", hour: 18, durationMin: 90 },
-    { title: "Rec Center Workout", location: "Rec Center", hour: 20, durationMin: 60 },
-    { title: "Club Planning Meeting", location: "UU Plaza", hour: 17, durationMin: 75 },
-    { title: "Project Work Session", location: "Engineering East", hour: 19, durationMin: 120 },
-    { title: "Dinner with Friends", location: "Downtown SLO", hour: 21, durationMin: 75 },
-  ];
-
-  const events = [];
-  for (let dayOffset = 0; dayOffset < 7; dayOffset += 1) {
-    const eventCount = 2 + ((seed + dayOffset) % 2);
-    for (let index = 0; index < eventCount; index += 1) {
-      const template = templates[(seed + dayOffset + index) % templates.length];
-      const start = new Date(now);
-      start.setUTCDate(now.getUTCDate() + dayOffset);
-      start.setUTCHours(template.hour + ((seed + index) % 2), ((seed + index * 3) % 2) * 15, 0, 0);
-
-      const end = new Date(start);
-      end.setUTCMinutes(end.getUTCMinutes() + template.durationMin);
-
-      events.push({
-        id: `cal_evt_${Math.abs(hashString(`${userId}_${dayOffset}_${index}_${template.title}`))
-          .toString(36)
-          .slice(0, 10)}`,
-        user_id: userId,
-        title: template.title,
-        location: template.location,
-        start_at: start.toISOString(),
-        end_at: end.toISOString(),
-        source: "google_calendar",
-        timezone,
-      });
-    }
-  }
-
-  return events.sort((a, b) => new Date(a.start_at).getTime() - new Date(b.start_at).getTime());
+  const user = store.users.get(userId);
+  if (!user) return [];
+  ensureUserProfileMockData(user, timezone || user.timezone || DEFAULT_TIMEZONE);
+  return mockCalendarDataToEventRows(
+    userId,
+    user.mock_calendar_data_json,
+    user.timezone || timezone || DEFAULT_TIMEZONE,
+  );
 }
 
 function deriveAvailabilityFromEvents(userId, events, source = "google_calendar") {
@@ -616,12 +891,31 @@ function deriveAvailabilityFromEvents(userId, events, source = "google_calendar"
 }
 
 function syncMockCalendarForUser(userId, timezone = DEFAULT_TIMEZONE) {
-  const events = generateMockCalendarEventsForUser(userId, timezone);
-  const windows = deriveAvailabilityFromEvents(userId, events, "google_calendar");
+  const user = ensureStoreUserById(userId, {
+    displayName: "Local User",
+    timezone: normalizeTimezone(timezone || DEFAULT_TIMEZONE),
+  });
+  if (!user) {
+    return {
+      synced_at: NOW().toISOString(),
+      events_count: 0,
+      windows_count: 0,
+    };
+  }
+
+  user.timezone = normalizeTimezone(timezone || user.timezone || DEFAULT_TIMEZONE);
+  ensureUserProfileMockData(user, user.timezone);
+
+  const windows = mockCalendarDataToAvailabilityRows(userId, user.mock_calendar_data_json);
+  const events = mockCalendarDataToEventRows(userId, user.mock_calendar_data_json, user.timezone);
   const nowIso = NOW().toISOString();
 
   store.availabilities = store.availabilities.filter(
-    (row) => !(row.user_id === userId && ["google_calendar", "calendar_sync", "mock_calendar"].includes(row.source)),
+    (row) =>
+      !(
+        row.user_id === userId
+        && ["google_calendar", "calendar_sync", "mock_calendar", "predefined_mock_slots"].includes(row.source)
+      ),
   );
   store.availabilities.push(...windows);
   store.calendarEvents.set(userId, events);
@@ -640,14 +934,12 @@ function syncMockCalendarForUser(userId, timezone = DEFAULT_TIMEZONE) {
 }
 
 function getUserAvailability(userId, { startAt = null, endAt = null } = {}) {
-  if (!store.users.get(userId)) {
-    ensureStoreUserFromContext({
-      userId,
-      email: `${String(userId).replace(/[^a-z0-9._-]/gi, "").slice(0, 24) || "user"}@local.mock`,
-      displayName: "Local User",
-      timezone: DEFAULT_TIMEZONE,
-      onboardingComplete: true,
-    });
+  const existingUser = ensureStoreUserById(userId, {
+    displayName: "Local User",
+    timezone: DEFAULT_TIMEZONE,
+  });
+  if (existingUser) {
+    ensureUserProfileMockData(existingUser, existingUser.timezone || DEFAULT_TIMEZONE);
   }
 
   const normalizedStart = toIsoOrNull(startAt);
@@ -733,7 +1025,13 @@ function findOverlapSlots(userIds = [], { startAt = null, endAt = null, minDurat
 
 function listCandidateParticipantUserIds(userId, includeGroup = false) {
   if (!includeGroup) return [userId];
-  const others = [...store.users.keys()].filter((candidate) => candidate !== userId).slice(0, 2);
+  const user = store.users.get(userId);
+  const friendIds = user
+    ? normalizeUuidArray(user.mock_friend_user_ids || [], userId).filter((candidate) => store.users.has(candidate))
+    : [];
+  const others = friendIds.length > 0
+    ? friendIds.slice(0, 2)
+    : [...store.users.keys()].filter((candidate) => candidate !== userId).slice(0, 2);
   return [userId, ...others];
 }
 
@@ -789,6 +1087,7 @@ function bookingOptions({ userId, item, includeGroup }) {
 function buildUserState(userId) {
   const user = store.users.get(userId);
   if (!user) return null;
+  ensureUserProfileMockData(user, user.timezone || DEFAULT_TIMEZONE);
 
   const preferences = getOrInitPreferences(userId);
   const connections = getOrInitConnections(userId);
@@ -802,6 +1101,16 @@ function buildUserState(userId) {
   }));
   const events = store.calendarEvents.get(userId) || [];
   const calendarConnected = Boolean(connections.calendar_google_connected || connections.calendar_ics_connected);
+  const friendIds = normalizeUuidArray(user.mock_friend_user_ids || [], user.id);
+  const friends = friendIds
+    .map((friendId) => store.users.get(friendId))
+    .filter(Boolean)
+    .map((friend) => ({
+      user_id: friend.id,
+      email: friend.email,
+      name: friend.display_name || "",
+      timezone: friend.timezone || DEFAULT_TIMEZONE,
+    }));
 
   return {
     user: {
@@ -820,6 +1129,13 @@ function buildUserState(userId) {
     },
     syncedAt: connections.last_calendar_sync_at || null,
     eventsCount: events.length,
+    friends,
+    profile: {
+      mock_calendar_data_json: user.mock_calendar_data_json || { availability_windows: [] },
+      mock_friend_user_ids: friendIds,
+      jarvis_chat_data_json: user.jarvis_chat_data_json || { messages: [] },
+      canvas_link_data_json: user.canvas_link_data_json || { connected: false },
+    },
     lastAction: null,
   };
 }
@@ -834,6 +1150,7 @@ async function upsertSupabaseUserState(userId) {
   if (!user || !isUuid(user.id)) {
     return { ok: false, reason: "user_not_uuid" };
   }
+  ensureUserProfileMockData(user, user.timezone || DEFAULT_TIMEZONE);
 
   const preferences = getOrInitPreferences(userId);
   const connections = getOrInitConnections(userId);
@@ -852,6 +1169,10 @@ async function upsertSupabaseUserState(userId) {
           ? normalizeEmail(user.email)
           : null,
         onboarding_complete: Boolean(user.onboarding_complete),
+        mock_calendar_data_json: user.mock_calendar_data_json || { availability_windows: [] },
+        jarvis_chat_data_json: user.jarvis_chat_data_json || { messages: [] },
+        canvas_link_data_json: user.canvas_link_data_json || { connected: false },
+        mock_friend_user_ids: normalizeUuidArray(user.mock_friend_user_ids || [], user.id),
         created_at: user.created_at || nowIso,
         updated_at: nowIso,
       },
@@ -1451,6 +1772,7 @@ export function registerPlannerApi(app) {
       password,
       timezone: normalizeTimezone(req.body?.timezone),
     };
+    ensureUserProfileMockData(user, user.timezone || DEFAULT_TIMEZONE);
 
     store.users.set(userId, user);
     getOrInitPreferences(userId);
@@ -1484,6 +1806,7 @@ export function registerPlannerApi(app) {
       res.status(401).json({ error: "Invalid credentials" });
       return;
     }
+    ensureUserProfileMockData(user, user.timezone || DEFAULT_TIMEZONE);
 
     const sessionToken = randomUUID();
     store.sessions.set(sessionToken, user.id);
@@ -1515,10 +1838,12 @@ export function registerPlannerApi(app) {
         password: `google-oauth-${randomUUID()}`,
         timezone: normalizeTimezone(req.body?.timezone),
       };
+      ensureUserProfileMockData(user, user.timezone || DEFAULT_TIMEZONE);
       store.users.set(userId, user);
       getOrInitPreferences(userId);
       getOrInitConnections(userId);
     }
+    ensureUserProfileMockData(user, user.timezone || DEFAULT_TIMEZONE);
 
     const sessionToken = randomUUID();
     store.sessions.set(sessionToken, user.id);
@@ -1669,6 +1994,7 @@ export function registerPlannerApi(app) {
   app.get("/api/users", (_req, res) => {
     const items = [...store.users.values()]
       .map((user) => {
+        ensureUserProfileMockData(user, user.timezone || DEFAULT_TIMEZONE);
         const state = buildUserState(user.id);
         return {
           user_id: user.id,
@@ -1677,6 +2003,7 @@ export function registerPlannerApi(app) {
           timezone: user.timezone || DEFAULT_TIMEZONE,
           windows_count: state?.availability?.length || 0,
           events_count: state?.eventsCount || 0,
+          friend_count: state?.friends?.length || 0,
         };
       })
       .sort((a, b) => a.name.localeCompare(b.name));
@@ -1706,6 +2033,24 @@ export function registerPlannerApi(app) {
       mergePreferencePayload(user.id, payload.preferences);
     }
 
+    if (Array.isArray(payload.mock_friend_user_ids)) {
+      user.mock_friend_user_ids = normalizeUuidArray(payload.mock_friend_user_ids, user.id);
+    }
+    if (payload.mock_calendar_data_json && typeof payload.mock_calendar_data_json === "object") {
+      user.mock_calendar_data_json = normalizeMockCalendarData(
+        payload.mock_calendar_data_json,
+        user.id,
+        user.timezone || DEFAULT_TIMEZONE,
+      );
+    }
+    if (payload.jarvis_chat_data_json && typeof payload.jarvis_chat_data_json === "object") {
+      user.jarvis_chat_data_json = normalizeJarvisChatData(payload.jarvis_chat_data_json);
+    }
+    if (payload.canvas_link_data_json && typeof payload.canvas_link_data_json === "object") {
+      user.canvas_link_data_json = normalizeCanvasLinkData(payload.canvas_link_data_json, user.canvas_link_data_json);
+    }
+    ensureUserProfileMockData(user, user.timezone || DEFAULT_TIMEZONE);
+
     if (payload.sync_calendar || payload.syncCalendar) {
       syncMockCalendarForUser(user.id, user.timezone || DEFAULT_TIMEZONE);
     } else {
@@ -1725,7 +2070,10 @@ export function registerPlannerApi(app) {
 
   app.get("/api/users/:user_id/state", (req, res) => {
     const userId = String(req.params.user_id || "").trim();
-    const user = store.users.get(userId);
+    const user = ensureStoreUserById(userId, {
+      displayName: "Local User",
+      timezone: DEFAULT_TIMEZONE,
+    });
     if (!user) {
       res.status(404).json({ error: "User not found" });
       return;
@@ -1733,6 +2081,86 @@ export function registerPlannerApi(app) {
 
     const state = buildUserState(userId);
     res.json(state);
+  });
+
+  app.get("/api/users/:user_id/friends", (req, res) => {
+    const userId = String(req.params.user_id || "").trim();
+    const user = ensureStoreUserById(userId, {
+      displayName: "Local User",
+      timezone: DEFAULT_TIMEZONE,
+    });
+    if (!user) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+
+    ensureUserProfileMockData(user, user.timezone || DEFAULT_TIMEZONE);
+    const friendIds = normalizeUuidArray(user.mock_friend_user_ids || [], user.id);
+    const items = friendIds
+      .map((friendId) => store.users.get(friendId))
+      .filter(Boolean)
+      .map((friend) => ({
+        user_id: friend.id,
+        email: friend.email,
+        name: friend.display_name || "",
+        timezone: friend.timezone || DEFAULT_TIMEZONE,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    res.json({
+      user_id: userId,
+      friend_user_ids: friendIds,
+      items,
+      total: items.length,
+    });
+  });
+
+  app.get("/api/users/:user_id/jarvis-chat", (req, res) => {
+    const userId = String(req.params.user_id || "").trim();
+    const user = ensureStoreUserById(userId, {
+      displayName: "Local User",
+      timezone: DEFAULT_TIMEZONE,
+    });
+    if (!user) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+    ensureUserProfileMockData(user, user.timezone || DEFAULT_TIMEZONE);
+    res.json({
+      user_id: userId,
+      jarvis_chat_data_json: user.jarvis_chat_data_json || { messages: [] },
+    });
+  });
+
+  app.put("/api/users/:user_id/jarvis-chat", async (req, res) => {
+    const userId = String(req.params.user_id || "").trim();
+    const user = ensureStoreUserById(userId, {
+      displayName: "Local User",
+      timezone: DEFAULT_TIMEZONE,
+    });
+    if (!user) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+
+    const payload = req.body && typeof req.body === "object" ? req.body : {};
+    const chatData = normalizeJarvisChatData({
+      messages: Array.isArray(payload.messages) ? payload.messages : [],
+      updated_at: NOW().toISOString(),
+      version: payload.version || 1,
+    });
+
+    user.jarvis_chat_data_json = chatData;
+    ensureUserProfileMockData(user, user.timezone || DEFAULT_TIMEZONE);
+    await upsertSupabaseUserState(userId).catch(() => null);
+
+    res.json({
+      user_id: userId,
+      jarvis_chat_data_json: user.jarvis_chat_data_json,
+      message_count: Array.isArray(user.jarvis_chat_data_json?.messages)
+        ? user.jarvis_chat_data_json.messages.length
+        : 0,
+    });
   });
 
   app.put("/api/users/:user_id/preferences", async (req, res) => {
@@ -1957,6 +2385,17 @@ export function registerPlannerApi(app) {
     connections.canvas_mode = "oauth";
     connections.updated_at = NOW().toISOString();
     store.connections.set(auth.userId, connections);
+    auth.user.canvas_link_data_json = normalizeCanvasLinkData(
+      {
+        connected: true,
+        mode: "oauth",
+        instance_url: "https://canvas.instructure.com",
+        token_hint: auth.user.canvas_link_data_json?.token_hint || null,
+        linked_at: NOW().toISOString(),
+      },
+      auth.user.canvas_link_data_json,
+    );
+    ensureUserProfileMockData(auth.user, auth.user.timezone || DEFAULT_TIMEZONE);
 
     if (!store.studyTasks.some((task) => task.user_id === auth.userId)) {
       store.studyTasks.push(
@@ -1992,6 +2431,7 @@ export function registerPlannerApi(app) {
     if (!auth) return;
 
     const token = String(req.body?.token || "").trim();
+    const instanceUrl = String(req.body?.instance_url || req.body?.instanceUrl || "").trim();
     if (!token) {
       res.status(400).json({ error: "token is required" });
       return;
@@ -2002,6 +2442,17 @@ export function registerPlannerApi(app) {
     connections.canvas_mode = "manual";
     connections.updated_at = NOW().toISOString();
     store.connections.set(auth.userId, connections);
+    auth.user.canvas_link_data_json = normalizeCanvasLinkData(
+      {
+        connected: true,
+        mode: "manual",
+        instance_url: instanceUrl || auth.user.canvas_link_data_json?.instance_url || "https://canvas.calpoly.edu",
+        token_hint: tokenHintFromCanvasToken(token),
+        linked_at: NOW().toISOString(),
+      },
+      auth.user.canvas_link_data_json,
+    );
+    ensureUserProfileMockData(auth.user, auth.user.timezone || DEFAULT_TIMEZONE);
 
     upsertSupabaseUserState(auth.userId).catch(() => null);
     res.json({ connected: true, mode: "manual", connections });

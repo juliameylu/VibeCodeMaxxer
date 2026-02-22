@@ -22,6 +22,7 @@ import { matchPlaceToPreferences } from "../../lib/recommendation/preferenceMatc
 import {
   bookMockReservation,
   getMockReservationAvailability,
+  listBackendFriends,
   listBackendUsers,
 } from "../../lib/api/backend";
 import { getSession } from "../../lib/auth/session";
@@ -208,6 +209,7 @@ export function Restaurants() {
   const [sharedOnly, setSharedOnly] = useState(false);
   const [compareUsername, setCompareUsername] = useState("");
   const [compareUsers, setCompareUsers] = useState<any[]>([]);
+  const [friendUserIds, setFriendUserIds] = useState<string[]>([]);
   const [slotEligibilityByPlaceId, setSlotEligibilityByPlaceId] = useState<Record<string, any>>({});
   const [slotEligibilityLoading, setSlotEligibilityLoading] = useState(false);
   const [slotEligibilityError, setSlotEligibilityError] = useState("");
@@ -278,10 +280,14 @@ export function Restaurants() {
     };
   }, [session?.timezone]);
 
-  const compareCandidates = useMemo(
-    () => compareUsers.filter((user) => user.email !== session?.email),
-    [compareUsers, session?.email],
-  );
+  const compareCandidates = useMemo(() => {
+    const pool = compareUsers.filter((user) => user.email !== session?.email);
+    if (friendUserIds.length === 0) return pool;
+
+    const friendSet = new Set(friendUserIds);
+    const friends = pool.filter((user) => friendSet.has(String(user.user_id || "")));
+    return friends.length > 0 ? friends : pool;
+  }, [compareUsers, friendUserIds, session?.email]);
 
   const safeCompareUsername =
     compareCandidates.find((user) => user.username === compareUsername)?.username
@@ -296,6 +302,33 @@ export function Restaurants() {
 
   const backendUserId = primaryCalendarState.data.user?.user_id || session?.user_id || "u_guest_mock";
   const backendUserError = session?.email ? primaryCalendarState.error : "";
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadFriendUserIds() {
+      if (!backendUserId) {
+        if (active) setFriendUserIds([]);
+        return;
+      }
+
+      try {
+        const response = await listBackendFriends(backendUserId);
+        if (!active) return;
+        const ids = Array.isArray(response?.friend_user_ids)
+          ? response.friend_user_ids.map((id: any) => String(id || "")).filter(Boolean)
+          : [];
+        setFriendUserIds(ids);
+      } catch {
+        if (active) setFriendUserIds([]);
+      }
+    }
+
+    loadFriendUserIds();
+    return () => {
+      active = false;
+    };
+  }, [backendUserId]);
 
   const activePreferences = useMemo(
     () => [...preferences, customPreference].map((value) => String(value || "").trim()).filter(Boolean),
@@ -812,7 +845,7 @@ export function Restaurants() {
                 }}
                 className="h-4 w-4 rounded accent-[#F2E8CF]"
               />
-              Shared availability only
+              Friend overlap only
             </label>
           </div>
 
@@ -865,23 +898,29 @@ export function Restaurants() {
             </label>
 
             {sharedOnly ? (
-              <label className="text-[10px] font-black tracking-wider text-white/50 uppercase">
-                <span className="inline-flex items-center gap-1"><Users size={12} /> Compare user</span>
-                <select
-                  value={safeCompareUsername}
-                  onChange={(event) => {
-                    setVisibleCount(6);
-                    setCompareUsername(event.target.value);
-                  }}
-                  className="mt-1 w-full rounded-xl border border-white/15 bg-black/30 px-3 py-2 text-xs text-white outline-none"
-                >
-                  {compareCandidates.map((user) => (
-                    <option key={user.user_id} value={user.username}>
-                      {user.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              compareCandidates.length > 0 ? (
+                <label className="text-[10px] font-black tracking-wider text-white/50 uppercase">
+                  <span className="inline-flex items-center gap-1"><Users size={12} /> Friend</span>
+                  <select
+                    value={safeCompareUsername}
+                    onChange={(event) => {
+                      setVisibleCount(6);
+                      setCompareUsername(event.target.value);
+                    }}
+                    className="mt-1 w-full rounded-xl border border-white/15 bg-black/30 px-3 py-2 text-xs text-white outline-none"
+                  >
+                    {compareCandidates.map((user) => (
+                      <option key={user.user_id} value={user.username}>
+                        {user.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : (
+                <div className="rounded-xl border border-white/10 bg-black/25 p-3 text-[11px] text-white/65">
+                  No friends available yet for overlap matching.
+                </div>
+              )
             ) : null}
           </div>
 

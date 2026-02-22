@@ -7,9 +7,18 @@ create table if not exists profiles (
   display_name text,
   cal_poly_email text,
   onboarding_complete boolean default false,
+  mock_calendar_data_json jsonb not null default '{}'::jsonb,
+  jarvis_chat_data_json jsonb not null default '{"messages":[],"updated_at":null}'::jsonb,
+  canvas_link_data_json jsonb not null default '{}'::jsonb,
+  mock_friend_user_ids uuid[] not null default '{}',
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
+
+alter table profiles add column if not exists mock_calendar_data_json jsonb not null default '{}'::jsonb;
+alter table profiles add column if not exists jarvis_chat_data_json jsonb not null default '{"messages":[],"updated_at":null}'::jsonb;
+alter table profiles add column if not exists canvas_link_data_json jsonb not null default '{}'::jsonb;
+alter table profiles add column if not exists mock_friend_user_ids uuid[] not null default '{}';
 
 create table if not exists preferences (
   user_id uuid primary key references profiles(id) on delete cascade,

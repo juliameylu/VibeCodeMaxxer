@@ -8,6 +8,8 @@ import { motion, AnimatePresence } from "motion/react";
 import { JarvisLogo } from "../components/JarvisLogo";
 import { setSession } from "../../lib/auth/session";
 import { syncMockGoogleCalendarForUser } from "../../lib/hooks/useUserCalendarState";
+import { apiFetch } from "../../lib/apiClient";
+import { bootstrapBackendUser } from "../../lib/api/backend";
 
 const natureBg = "https://images.unsplash.com/photo-1715559929451-4019bf7315a1?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxTYW4lMjBMdWlzJTIwT2Jpc3BvJTIwQmlzaG9wJTIwUGVhayUyMHNjZW5pYyUyMG1vdW50YWluJTIwbmF0dXJlJTIwYWVzdGhldGljfGVufDF8fHx8MTc3MTcxODgwM3ww&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral";
 
@@ -39,13 +41,28 @@ export function SignIn() {
       || username,
     ).trim();
 
-    return setSession({
+    const appSession = setSession({
       user_id: authUser.id,
       username,
       name: displayName,
       email: emailLower,
       timezone,
     });
+
+    await bootstrapBackendUser(
+      {
+        user_id: appSession.user_id,
+        email: appSession.email,
+        name: appSession.name,
+        timezone: appSession.timezone,
+      },
+      {
+        syncCalendar: false,
+        syncSupabase: true,
+      },
+    ).catch(() => null);
+
+    return appSession;
   };
 
   // ---- Step 1: Auth ----
@@ -158,10 +175,22 @@ export function SignIn() {
   };
 
   // ---- Step 2: Canvas / Calendar ----
-  const handleLinkCanvas = () => {
-    if (canvasToken.trim()) {
-      localStorage.setItem("canvas_token", canvasToken.trim());
-      toast.success("Canvas linked!");
+  const handleLinkCanvas = async () => {
+    const token = canvasToken.trim();
+    if (!token) {
+      setStep(3);
+      return;
+    }
+
+    localStorage.setItem("canvas_token", token);
+    try {
+      await apiFetch("/api/canvas/connect/token", {
+        method: "POST",
+        body: { token },
+      });
+      toast.success("Canvas linked and saved to your profile.");
+    } catch (error: any) {
+      toast.warning(error?.message || "Canvas token saved locally, but profile sync failed.");
     }
     setStep(3);
   };

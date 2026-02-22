@@ -1,7 +1,8 @@
 import { supabase } from "/utils/supabase/client";
 import { projectId, publicAnonKey } from "/utils/supabase/info";
 
-const PROFILE_COLUMNS = "id,email,display_name,cal_poly_email,onboarding_complete,created_at,updated_at";
+const PROFILE_COLUMNS =
+  "id,email,display_name,cal_poly_email,onboarding_complete,mock_calendar_data_json,jarvis_chat_data_json,canvas_link_data_json,mock_friend_user_ids,created_at,updated_at";
 const isSupabaseConfigured = Boolean(projectId && publicAnonKey);
 
 function notConfiguredResult() {

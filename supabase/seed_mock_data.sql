@@ -1,19 +1,225 @@
 -- Seed data for local testing against supabase/schema.sql
 -- Safe to re-run (uses upserts).
 
-insert into profiles (id, email, display_name, cal_poly_email, onboarding_complete, created_at, updated_at)
+insert into profiles (
+  id,
+  email,
+  display_name,
+  cal_poly_email,
+  onboarding_complete,
+  mock_calendar_data_json,
+  jarvis_chat_data_json,
+  canvas_link_data_json,
+  mock_friend_user_ids,
+  created_at,
+  updated_at
+)
 values
-  ('95bbf252-fbd8-42c5-a6fb-04f50e4924ef', 'ceyannabadyal@gmail.com', 'Ceyanna Badyal', 'ceyannabadyal@calpoly.edu', true, now(), now()),
-  ('2e4ec7d1-1b2e-4efe-a3b8-f912d4e539b6', 'meow@gmail.com', 'Meow', 'meow@calpoly.edu', true, now(), now()),
-  ('6f0f8e72-8717-4b8d-a2ea-e2dca4e5f111', 'faith@calpoly.edu', 'Faith Johnson', 'faith@calpoly.edu', true, now(), now()),
-  ('61fbbf57-b7c6-4ddd-aa9f-caf3afba2222', 'maria@calpoly.edu', 'Maria Lopez', 'maria@calpoly.edu', true, now(), now()),
-  ('3f1b578d-51e6-4f84-b0f5-9cf6d4dc3333', 'devin@calpoly.edu', 'Devin Patel', 'devin@calpoly.edu', true, now(), now())
+  (
+    '95bbf252-fbd8-42c5-a6fb-04f50e4924ef',
+    'ceyannabadyal@gmail.com',
+    'Ceyanna Badyal',
+    'ceyannabadyal@calpoly.edu',
+    true,
+    jsonb_build_object(
+      'version', 1,
+      'source', 'predefined_mock_slots',
+      'timezone', 'America/Los_Angeles',
+      'availability_windows', jsonb_build_array(
+        jsonb_build_object(
+          'window_id', 'ceyanna_slot_1',
+          'start_ts', to_char(date_trunc('day', now()) + interval '1 day 17 hours 45 minutes', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+          'end_ts', to_char(date_trunc('day', now()) + interval '1 day 19 hours 15 minutes', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+        ),
+        jsonb_build_object(
+          'window_id', 'ceyanna_slot_2',
+          'start_ts', to_char(date_trunc('day', now()) + interval '2 day 18 hours 30 minutes', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+          'end_ts', to_char(date_trunc('day', now()) + interval '2 day 20 hours', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+        )
+      ),
+      'updated_at', now()
+    ),
+    '{"messages":[{"role":"assistant","text":"Hey. I can help you plan around your availability."}],"updated_at":null}'::jsonb,
+    jsonb_build_object(
+      'connected', false,
+      'mode', null,
+      'instance_url', null,
+      'token_hint', null,
+      'linked_at', null,
+      'updated_at', now()
+    ),
+    '{}'::uuid[],
+    now(),
+    now()
+  ),
+  (
+    '2e4ec7d1-1b2e-4efe-a3b8-f912d4e539b6',
+    'meow@gmail.com',
+    'Meow',
+    'meow@calpoly.edu',
+    true,
+    jsonb_build_object(
+      'version', 1,
+      'source', 'predefined_mock_slots',
+      'timezone', 'America/Los_Angeles',
+      'availability_windows', jsonb_build_array(
+        jsonb_build_object(
+          'window_id', 'meow_slot_1',
+          'start_ts', to_char(date_trunc('day', now()) + interval '1 day 18 hours', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+          'end_ts', to_char(date_trunc('day', now()) + interval '1 day 19 hours 45 minutes', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+        ),
+        jsonb_build_object(
+          'window_id', 'meow_slot_2',
+          'start_ts', to_char(date_trunc('day', now()) + interval '2 day 19 hours', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+          'end_ts', to_char(date_trunc('day', now()) + interval '2 day 21 hours', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+        )
+      ),
+      'updated_at', now()
+    ),
+    '{"messages":[{"role":"assistant","text":"Hey Meow, want a coffee or study plan?"}],"updated_at":null}'::jsonb,
+    jsonb_build_object(
+      'connected', false,
+      'mode', null,
+      'instance_url', null,
+      'token_hint', null,
+      'linked_at', null,
+      'updated_at', now()
+    ),
+    '{}'::uuid[],
+    now(),
+    now()
+  ),
+  (
+    '6f0f8e72-8717-4b8d-a2ea-e2dca4e5f111',
+    'faith@calpoly.edu',
+    'Faith Johnson',
+    'faith@calpoly.edu',
+    true,
+    jsonb_build_object(
+      'version', 1,
+      'source', 'predefined_mock_slots',
+      'timezone', 'America/Los_Angeles',
+      'availability_windows', jsonb_build_array(
+        jsonb_build_object(
+          'window_id', 'faith_slot_1',
+          'start_ts', to_char(date_trunc('day', now()) + interval '1 day 17 hours 30 minutes', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+          'end_ts', to_char(date_trunc('day', now()) + interval '1 day 19 hours', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+        ),
+        jsonb_build_object(
+          'window_id', 'faith_slot_2',
+          'start_ts', to_char(date_trunc('day', now()) + interval '1 day 20 hours 15 minutes', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+          'end_ts', to_char(date_trunc('day', now()) + interval '1 day 22 hours', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+        ),
+        jsonb_build_object(
+          'window_id', 'faith_slot_3',
+          'start_ts', to_char(date_trunc('day', now()) + interval '2 day 18 hours', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+          'end_ts', to_char(date_trunc('day', now()) + interval '2 day 20 hours 30 minutes', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+        )
+      ),
+      'updated_at', now()
+    ),
+    '{"messages":[{"role":"assistant","text":"Hi Faith. I can align restaurant picks with your friend overlap windows."}],"updated_at":null}'::jsonb,
+    jsonb_build_object(
+      'connected', true,
+      'mode', 'manual',
+      'instance_url', 'https://canvas.calpoly.edu',
+      'token_hint', 'demo...faith',
+      'linked_at', '2026-02-01T18:00:00.000Z',
+      'updated_at', now()
+    ),
+    array['61fbbf57-b7c6-4ddd-aa9f-caf3afba2222'::uuid, '3f1b578d-51e6-4f84-b0f5-9cf6d4dc3333'::uuid],
+    now(),
+    now()
+  ),
+  (
+    '61fbbf57-b7c6-4ddd-aa9f-caf3afba2222',
+    'maria@calpoly.edu',
+    'Maria Lopez',
+    'maria@calpoly.edu',
+    true,
+    jsonb_build_object(
+      'version', 1,
+      'source', 'predefined_mock_slots',
+      'timezone', 'America/Los_Angeles',
+      'availability_windows', jsonb_build_array(
+        jsonb_build_object(
+          'window_id', 'maria_slot_1',
+          'start_ts', to_char(date_trunc('day', now()) + interval '1 day 18 hours 15 minutes', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+          'end_ts', to_char(date_trunc('day', now()) + interval '1 day 19 hours 45 minutes', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+        ),
+        jsonb_build_object(
+          'window_id', 'maria_slot_2',
+          'start_ts', to_char(date_trunc('day', now()) + interval '1 day 20 hours 30 minutes', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+          'end_ts', to_char(date_trunc('day', now()) + interval '1 day 22 hours 15 minutes', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+        ),
+        jsonb_build_object(
+          'window_id', 'maria_slot_3',
+          'start_ts', to_char(date_trunc('day', now()) + interval '2 day 18 hours 45 minutes', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+          'end_ts', to_char(date_trunc('day', now()) + interval '2 day 20 hours 45 minutes', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+        )
+      ),
+      'updated_at', now()
+    ),
+    '{"messages":[{"role":"assistant","text":"Hi Maria. Ready to coordinate with Faith?"}],"updated_at":null}'::jsonb,
+    jsonb_build_object(
+      'connected', false,
+      'mode', null,
+      'instance_url', null,
+      'token_hint', null,
+      'linked_at', null,
+      'updated_at', now()
+    ),
+    array['6f0f8e72-8717-4b8d-a2ea-e2dca4e5f111'::uuid],
+    now(),
+    now()
+  ),
+  (
+    '3f1b578d-51e6-4f84-b0f5-9cf6d4dc3333',
+    'devin@calpoly.edu',
+    'Devin Patel',
+    'devin@calpoly.edu',
+    true,
+    jsonb_build_object(
+      'version', 1,
+      'source', 'predefined_mock_slots',
+      'timezone', 'America/Los_Angeles',
+      'availability_windows', jsonb_build_array(
+        jsonb_build_object(
+          'window_id', 'devin_slot_1',
+          'start_ts', to_char(date_trunc('day', now()) + interval '1 day 17 hours 45 minutes', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+          'end_ts', to_char(date_trunc('day', now()) + interval '1 day 18 hours 45 minutes', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+        ),
+        jsonb_build_object(
+          'window_id', 'devin_slot_2',
+          'start_ts', to_char(date_trunc('day', now()) + interval '2 day 19 hours 15 minutes', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+          'end_ts', to_char(date_trunc('day', now()) + interval '2 day 21 hours 15 minutes', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+        )
+      ),
+      'updated_at', now()
+    ),
+    '{"messages":[{"role":"assistant","text":"Hi Devin. I can suggest overlap-first reservations."}],"updated_at":null}'::jsonb,
+    jsonb_build_object(
+      'connected', false,
+      'mode', null,
+      'instance_url', null,
+      'token_hint', null,
+      'linked_at', null,
+      'updated_at', now()
+    ),
+    array['6f0f8e72-8717-4b8d-a2ea-e2dca4e5f111'::uuid],
+    now(),
+    now()
+  )
 on conflict (id) do update
 set
   email = excluded.email,
   display_name = excluded.display_name,
   cal_poly_email = excluded.cal_poly_email,
   onboarding_complete = excluded.onboarding_complete,
+  mock_calendar_data_json = excluded.mock_calendar_data_json,
+  jarvis_chat_data_json = excluded.jarvis_chat_data_json,
+  canvas_link_data_json = excluded.canvas_link_data_json,
+  mock_friend_user_ids = excluded.mock_friend_user_ids,
   updated_at = now();
 
 insert into preferences (

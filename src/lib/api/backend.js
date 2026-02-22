@@ -99,6 +99,10 @@ export function listBackendUsers() {
   return httpGetJson("/api/users");
 }
 
+export function listBackendFriends(userId) {
+  return httpGetJson(`/api/users/${encodeURIComponent(String(userId || ""))}/friends`);
+}
+
 export function updateBackendUserPreferences(userId, payload) {
   return putJson(`/api/users/${encodeURIComponent(String(userId || ""))}/preferences`, payload || {});
 }
@@ -122,6 +126,14 @@ export function getUserAvailabilityOverlap(userId, otherUserId, params = {}) {
 
 export function getBackendSystemState() {
   return httpGetJson("/api/backend/state");
+}
+
+export function getJarvisChatSnapshot(userId) {
+  return httpGetJson(`/api/users/${encodeURIComponent(String(userId || ""))}/jarvis-chat`);
+}
+
+export function saveJarvisChatSnapshot(userId, payload = {}) {
+  return putJson(`/api/users/${encodeURIComponent(String(userId || ""))}/jarvis-chat`, payload || {});
 }
 
 export function listBackendEndpoints() {

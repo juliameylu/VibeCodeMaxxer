@@ -1,4 +1,4 @@
-import "dotenv/config";
+import dotenv from "dotenv";
 import express from "express";
 import cors from "cors";
 import * as cheerio from "cheerio";
@@ -7,6 +7,9 @@ import { registerPlannerApi } from "./plannerApi.js";
 import eventsRouter from "./routes/eventsApi.js";
 import placesRouter from "./routes/placesApi.js";
 import reservationsRouter from "./routes/mockReservationsApi.js";
+
+dotenv.config({ path: ".env" });
+dotenv.config({ path: ".env.local", override: true });
 
 const app = express();
 const PORT = Number(process.env.BACKEND_PORT || 8787);

@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useNavigate, useLocation } from "react-router";
 import { motion, AnimatePresence } from "motion/react";
 import { X, Send, ExternalLink, Sparkles } from "lucide-react";
@@ -40,6 +40,11 @@ export function FloatingJarvis() {
   const [input, setInput] = useState("");
   const hasAnimated = useRef(false);
 
+  useEffect(() => {
+    // Prevent stale floating sheets from intercepting clicks after route changes.
+    setOpen(false);
+  }, [pathname]);
+
   if (HIDDEN_PATHS.includes(pathname)) return null;
 
   const send = () => {
@@ -62,7 +67,7 @@ export function FloatingJarvis() {
           animate={{ scale: 1 }}
           onAnimationComplete={() => { hasAnimated.current = true; }}
           onClick={() => setOpen(true)}
-          className="fixed bottom-24 right-4 z-40 w-14 h-14 bg-[#F2E8CF] rounded-full flex items-center justify-center shadow-lg shadow-[#F2E8CF]/20 active:scale-90 transition-transform"
+          className="fixed bottom-24 right-4 z-[35] w-14 h-14 bg-[#F2E8CF] rounded-full flex items-center justify-center shadow-lg shadow-[#F2E8CF]/20 active:scale-90 transition-transform"
           style={{
             right: "calc(var(--app-frame-right-offset, 0px) + 16px)",
             bottom: "calc(var(--app-nav-bottom-offset, 0px) + 96px)",
@@ -80,7 +85,7 @@ export function FloatingJarvis() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 100, scale: 0.95 }}
             transition={{ type: "spring", damping: 25, stiffness: 300 }}
-            className="fixed bottom-20 right-3 left-3 z-50 bg-black/60 backdrop-blur-2xl rounded-2xl border border-[#F2E8CF]/15 shadow-2xl shadow-black/50 max-h-[60vh] flex flex-col overflow-hidden"
+            className="fixed bottom-20 right-3 left-3 z-[45] bg-black/60 backdrop-blur-2xl rounded-2xl border border-[#F2E8CF]/15 shadow-2xl shadow-black/50 max-h-[60vh] flex flex-col overflow-hidden"
             style={{
               left: "calc(var(--app-frame-left-offset, 0px) + 12px)",
               right: "calc(var(--app-frame-right-offset, 0px) + 12px)",
