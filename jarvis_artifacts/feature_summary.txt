@@ -1,0 +1,5 @@
+task=seed_mock_users
+feature=seeding
+focus=Deterministic mock user/event data generation
+run_id=22277012861
+run_attempt=1
