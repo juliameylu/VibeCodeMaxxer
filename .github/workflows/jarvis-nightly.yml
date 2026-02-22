@@ -21,11 +21,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        task:
-          - reco_dummy
-          - reservation_idempotency
-          - seed_mock_users
-          - logging_and_artifacts
+        include:
+          - task: reco_dummy
+            prompt_file: .jarvis/tasks/reco_dummy.md
+            feature_slug: recommendations
+            focus: "Deterministic demo recommendations API + tests"
+          - task: reservation_idempotency
+            prompt_file: .jarvis/tasks/reservation_idempotency.md
+            feature_slug: reservations
+            focus: "Idempotent reservation intents + status endpoints"
+          - task: seed_mock_users
+            prompt_file: .jarvis/tasks/seed_mock_users.md
+            feature_slug: seeding
+            focus: "Deterministic mock user/event data generation"
+          - task: logging_and_artifacts
+            prompt_file: .jarvis/tasks/logging_and_artifacts.md
+            feature_slug: logging
+            focus: "Structured logging + useful CI artifacts"
 
     steps:
       - name: Checkout
@@ -41,7 +53,7 @@ jobs:
       - name: Create branch for this agent
         id: branch
         run: |
-          BRANCH="jarvis/${{ matrix.task }}/run-${{ github.run_id }}"
+          BRANCH="jarvis/${{ matrix.feature_slug }}/run-${{ github.run_id }}-attempt-${{ github.run_attempt }}"
           echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
           git checkout -b "$BRANCH"
 
@@ -49,7 +61,7 @@ jobs:
         uses: openai/codex-action@v1
         with:
           openai_api_key: ${{ secrets.OPENAI_API_KEY }}
-          prompt_file: .jarvis/tasks/${{ matrix.task }}.md
+          prompt_file: ${{ matrix.prompt_file }}
 
       - name: Run tests (best effort)
         continue-on-error: true
@@ -65,6 +77,17 @@ jobs:
             pytest -q || true
           fi
 
+      - name: Write feature focus summary
+        run: |
+          mkdir -p jarvis_artifacts
+          {
+            echo "task=${{ matrix.task }}"
+            echo "feature=${{ matrix.feature_slug }}"
+            echo "focus=${{ matrix.focus }}"
+            echo "run_id=${{ github.run_id }}"
+            echo "run_attempt=${{ github.run_attempt }}"
+          } > jarvis_artifacts/feature_summary.txt
+
       - name: Collect logs and diffs
         if: always()
         run: |
@@ -72,6 +95,7 @@ jobs:
           git status --porcelain=v1 > jarvis_artifacts/git_status.txt || true
           git diff > jarvis_artifacts/git_diff.patch || true
           echo "${{ matrix.task }}" > jarvis_artifacts/task.txt
+          echo "${{ matrix.focus }}" > jarvis_artifacts/focus.txt
           date -u > jarvis_artifacts/utc_time.txt
 
       - name: Add app logs to artifacts (if present)
@@ -94,7 +118,7 @@ jobs:
         run: |
           if [ -n "$(git status --porcelain)" ]; then
             git add -A
-            git commit -m "Jarvis: ${{ matrix.task }} (run ${{ github.run_id }})"
+            git commit -m "Jarvis: ${{ matrix.feature_slug }} (${{ matrix.task }}) run ${{ github.run_id }}.${{ github.run_attempt }}"
           else
             echo "No changes to commit."
           fi
@@ -113,8 +137,8 @@ jobs:
         run: |
           if [ -n "$(git log origin/main..HEAD --oneline)" ]; then
             gh pr create \
-              --title "Jarvis: ${{ matrix.task }} (run ${{ github.run_id }})" \
-              --body "Automated by Jarvis nightly agents.\n\nArtifacts: see workflow run artifacts for logs/diffs." \
+              --title "Jarvis: ${{ matrix.feature_slug }} (${{ matrix.task }}) run ${{ github.run_id }}.${{ github.run_attempt }}" \
+              --body "Automated by Jarvis nightly agents.\n\nTask: ${{ matrix.task }}\nFeature: ${{ matrix.feature_slug }}\nFocus: ${{ matrix.focus }}\n\nArtifacts: see workflow run artifacts for logs/diffs." \
               --base main \
               --head "${{ steps.branch.outputs.branch }}" \
               || true

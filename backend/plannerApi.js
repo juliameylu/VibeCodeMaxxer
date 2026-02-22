@@ -25,6 +25,7 @@ const store = {
   studyTasks: [],
   aiActionLogs: [],
   pendingActions: new Map(),
+  reservationIntents: [],
   eventsCatalog: [
     {
       id: "event-brew-quiet",
@@ -103,6 +104,30 @@ const store = {
     }
   ]
 };
+
+const VALID_RESERVATION_TRANSITIONS = {
+  pending: new Set(["confirmed", "cancelled"]),
+  confirmed: new Set(),
+  cancelled: new Set()
+};
+
+function normalizePartySize(value) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < 1 || parsed > 20) return null;
+  return parsed;
+}
+
+function findReservationIntentById(id) {
+  return store.reservationIntents.find((intent) => intent.id === id) || null;
+}
+
+function findReservationIntentByIdempotency({ userId, idempotencyKey }) {
+  return (
+    store.reservationIntents.find(
+      (intent) => intent.userId === userId && intent.idempotencyKey === idempotencyKey
+    ) || null
+  );
+}
 
 function createNotification({ userId, type, title, message, entityType = null, entityId = null }) {
   const notification = {
@@ -1559,6 +1584,88 @@ export function registerPlannerApi(app) {
       ],
       requires_external_completion: true
     });
+  });
+
+  app.post("/api/reservation-intents", (req, res) => {
+    const auth = requireSession(req, res);
+    if (!auth) return;
+
+    const idempotencyKey = String(req.header("Idempotency-Key") || "").trim();
+    if (!idempotencyKey) {
+      res.status(400).json({ error: "Idempotency-Key header is required" });
+      return;
+    }
+
+    const venueId = String(req.body?.venueId || "").trim();
+    const datetime = String(req.body?.datetime || "").trim();
+    const partySize = normalizePartySize(req.body?.partySize);
+
+    if (!venueId || !datetime || !partySize) {
+      res.status(400).json({ error: "venueId, datetime, and valid partySize are required" });
+      return;
+    }
+
+    const existing = findReservationIntentByIdempotency({ userId: auth.userId, idempotencyKey });
+    if (existing) {
+      res.json({ intent: existing, idempotent: true });
+      return;
+    }
+
+    const intent = {
+      id: randomUUID(),
+      userId: auth.userId,
+      venueId,
+      datetime,
+      partySize,
+      status: "pending",
+      idempotencyKey,
+      createdAt: NOW().toISOString()
+    };
+    store.reservationIntents.push(intent);
+
+    setTimeout(() => {
+      const latest = findReservationIntentById(intent.id);
+      if (latest && latest.status === "pending") {
+        latest.status = "confirmed";
+      }
+    }, 1200);
+
+    res.status(201).json({ intent, idempotent: false });
+  });
+
+  app.get("/api/reservation-intents/:id", (req, res) => {
+    const auth = requireSession(req, res);
+    if (!auth) return;
+
+    const intent = findReservationIntentById(req.params.id);
+    if (!intent || intent.userId !== auth.userId) {
+      res.status(404).json({ error: "Reservation intent not found" });
+      return;
+    }
+
+    res.json({ intent });
+  });
+
+  app.post("/api/reservation-intents/:id/status", (req, res) => {
+    const auth = requireSession(req, res);
+    if (!auth) return;
+
+    const intent = findReservationIntentById(req.params.id);
+    if (!intent || intent.userId !== auth.userId) {
+      res.status(404).json({ error: "Reservation intent not found" });
+      return;
+    }
+
+    const nextStatus = String(req.body?.status || "").trim();
+    if (!VALID_RESERVATION_TRANSITIONS[intent.status]?.has(nextStatus)) {
+      res.status(400).json({
+        error: `Invalid status transition from ${intent.status} to ${nextStatus || "(empty)"}`
+      });
+      return;
+    }
+
+    intent.status = nextStatus;
+    res.json({ intent });
   });
 
   app.post("/api/payments/applepay/merchant-session", (req, res) => {

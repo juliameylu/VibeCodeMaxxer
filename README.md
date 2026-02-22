@@ -2,7 +2,7 @@
 
 ## Jarvis overnight automation setup
 
-This repository now includes the baseline folder and workflow structure for nightly Jarvis agents:
+This repository includes the shared nightly Jarvis setup:
 
 - `.jarvis/tasks/*`
 - `.jarvis/prompts/base_system.md`
@@ -10,26 +10,31 @@ This repository now includes the baseline folder and workflow structure for nigh
 - `scripts/jarvis/create_pr.sh`
 - `.github/workflows/jarvis-nightly.yml`
 
-### Preconditions for GitHub Actions
+## Exactly how to run GitHub Actions (shared repo)
 
-To run successfully overnight, ensure the following in GitHub:
+You only need to do this once for the shared repository (not once per teammate machine):
 
-1. **Repository secret exists**
-   - `OPENAI_API_KEY` at **Settings → Secrets and variables → Actions**.
-2. **Actions are enabled**
-   - Repository allows GitHub Actions workflows.
-3. **Workflow write permissions are allowed**
-   - **Settings → Actions → General → Workflow permissions** should allow read/write so branch pushes + PR creation work.
-4. **Branch protection is compatible**
-   - `main` may remain protected; workflow pushes to `jarvis/*` branches and opens PRs into `main`.
+1. Add repo secret `OPENAI_API_KEY`:
+   - GitHub → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**.
+2. Enable workflow write permissions:
+   - GitHub → **Settings** → **Actions** → **General** → set **Workflow permissions** to **Read and write**.
+   - Enable **Allow GitHub Actions to create and approve pull requests**.
+3. Merge `.github/workflows/jarvis-nightly.yml` to `main`.
+4. Manual validation run:
+   - GitHub → **Actions** → **Jarvis Nightly Agents** → **Run workflow**.
+5. Nightly auto-run:
+   - After merge, the cron schedule runs automatically each night.
 
-### Manual run
+## How the workflow now behaves
 
-- Go to **Actions → Jarvis Nightly Agents → Run workflow**.
+- Runs 4 feature tracks in matrix (`recommendations`, `reservations`, `seeding`, `logging`).
+- Creates a unique branch per feature + run attempt:
+  - `jarvis/<feature_slug>/run-<run_id>-attempt-<run_attempt>`
+- Includes a concise feature summary artifact (`task`, `feature`, `focus`, run info).
+- Commits/pushes/opens PR only if there are changes beyond `origin/main`.
 
-### Notes on current workflow behavior
+## Mock reservation behavior
 
-- The workflow runs a matrix of four tasks in parallel.
-- It uploads diffs/status/time as artifacts for each task run.
-- If `./logs` exists, logs are also uploaded in artifacts.
-- It commits/pushes only when there are commits beyond `origin/main`.
+- UI now has a **TRY NOW** reservation bot entry point on Dashboard that opens a reservation-capable event detail.
+- Event details booking uses in-repo mock API (`/api/reservation-intents`) instead of external booking for reservation intent.
+- Reservation intent is created with idempotency key, then auto-confirms shortly after for demo flow.
