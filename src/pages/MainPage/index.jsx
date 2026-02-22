@@ -44,6 +44,15 @@ export default function MainPage() {
             Fremont Theater
           </Link>
         </div>
+
+        <div className="mt-2 grid grid-cols-2 gap-2">
+          <Link to="/login" className="chip chip-idle text-center text-xs">
+            Mock Login
+          </Link>
+          <Link to="/profile" className="chip chip-idle text-center text-xs">
+            User Calendar State
+          </Link>
+        </div>
       </header>
 
       <main className="mt-5 space-y-5 pb-8">
