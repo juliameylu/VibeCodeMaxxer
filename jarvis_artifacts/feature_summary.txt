@@ -1,0 +1,5 @@
+task=logging_and_artifacts
+feature=logging
+focus=Structured logging + useful CI artifacts
+run_id=22483478031
+run_attempt=1
