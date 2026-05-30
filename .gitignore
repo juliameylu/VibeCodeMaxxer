@@ -10,3 +10,9 @@ dist/
 .vscode/*
 !.vscode/settings.json
 !.vscode/extensions.json
+
+# iOS / Capacitor build artifacts and duplicate numbered config files
+ios/App/App/public/
+ios/App/Pods/
+*.xcworkspace/xcuserdata/
+*.xcuserstate

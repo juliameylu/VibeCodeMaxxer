@@ -1,40 +1,156 @@
-# VibeCodeMaxxer
+# PolyJarvis — AI Campus Planning Agent
 
-## Jarvis overnight automation setup
+**Top-3 finish at the OpenAI Hackathon (Cal Poly SLO, Feb 2026)**
 
-This repository includes the shared nightly Jarvis setup:
+PolyJarvis is an agentic campus planning assistant for Cal Poly students. It connects LLM reasoning to real app state — building context from your schedule, preferences, events, and study tasks — then returns ranked recommendation cards and **confirmable actions** (RSVPs, plan drafts, booking intents, study tasks, jam joins) instead of acting autonomously.
 
-- `.jarvis/tasks/*`
-- `.jarvis/prompts/base_system.md`
-- `scripts/seed/seed_mock_users.js`
-- `scripts/jarvis/create_pr.sh`
-- `.github/workflows/jarvis-nightly.yml`
+> Repo name is `VibeCodeMaxxer` (hackathon team name); the product is **PolyJarvis**.
 
-## Exactly how to run GitHub Actions (shared repo)
+---
 
-You only need to do this once for the shared repository (not once per teammate machine):
+## What It Does
 
-1. Add repo secret `OPENAI_API_KEY`:
-   - GitHub → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**.
-2. Enable workflow write permissions:
-   - GitHub → **Settings** → **Actions** → **General** → set **Workflow permissions** to **Read and write**.
-   - Enable **Allow GitHub Actions to create and approve pull requests**.
-3. Merge `.github/workflows/jarvis-nightly.yml` to `main`.
-4. Manual validation run:
-   - GitHub → **Actions** → **Jarvis Nightly Agents** → **Run workflow**.
-5. Nightly auto-run:
-   - After merge, the cron schedule runs automatically each night.
+1. **Chat with Jarvis** — ask it to plan your day, find events, suggest places, or schedule a study block.
+2. **Get recommendation cards** — ranked events, restaurants, and study opportunities based on your behavior history, preferences, and schedule context.
+3. **Review proposed actions** — Jarvis proposes RSVPs, plan drafts, jam joins, and booking intents. You confirm before anything is written.
+4. **Persistent state** — preferences, plans, jams, and reservations persist to Supabase and optionally snapshot to DynamoDB.
+5. **Reservation workflows** — Jarvis can initiate phone reservation calls via Twilio (config-gated).
 
-## How the workflow now behaves
+---
 
-- Runs 4 feature tracks in matrix (`recommendations`, `reservations`, `seeding`, `logging`).
-- Creates a unique branch per feature + run attempt:
-  - `jarvis/<feature_slug>/run-<run_id>-attempt-<run_attempt>`
-- Includes a concise feature summary artifact (`task`, `feature`, `focus`, run info).
-- Commits/pushes/opens PR only if there are changes beyond `origin/main`.
+## Architecture
 
-## Mock reservation behavior
+```
+React/TypeScript frontend
+        |
+    Express backend (backend/plannerApi.js)
+        |
+  ┌─────────────────────────────────────────┐
+  │  summarizeUserContext()                 │  ← build user state from DB
+  │  rankedRecommendations()               │  ← hybrid.js ranking
+  │  inferProposedActions()                │  ← proposals (no writes yet)
+  │  generateAssistantReply()  ← OpenAI   │  ← LLM explains/expands
+  │  POST /api/agent/actions/:id/confirm   │  ← user confirms → writes happen
+  └─────────────────────────────────────────┘
+        |               |
+   Supabase         DynamoDB
+  (primary)        (snapshot)
+```
 
-- UI now has a **TRY NOW** reservation bot entry point on Dashboard that opens a reservation-capable event detail.
-- Event details booking uses in-repo mock API (`/api/reservation-intents`) instead of external booking for reservation intent.
-- Reservation intent is created with idempotency key, then auto-confirms shortly after for demo flow.
+**Recommendation ranking** (`src/lib/recommendation/hybrid.js`): combines behavior-weighted interaction history, semantic token-vector similarity, novelty scoring, and epsilon exploration. Local JS — not a vector DB or embeddings service.
+
+**Nightly eval automation** (`.github/workflows/jarvis-nightly.yml`): GitHub Actions matrix runs Codex agents across recommendation, reservation, seeding, and logging tracks; collects artifacts and opens PRs on changes.
+
+---
+
+## Tech Stack
+
+| Layer | Technologies |
+|-------|-------------|
+| Frontend | React, TypeScript, Vite, Tailwind CSS |
+| Backend | Node.js, Express |
+| AI | OpenAI Responses API, model fallbacks, deterministic fallback |
+| Persistence | Supabase/PostgreSQL, DynamoDB (optional snapshot) |
+| Auth | AWS Cognito JWT |
+| Integrations | Twilio (config-gated), Yelp API, Cal Poly events |
+| Infra | AWS App Runner, IAM-scoped access |
+| Automation | GitHub Actions, OpenAI Codex tasks |
+
+---
+
+## Project Status
+
+| Feature | Status |
+|---------|--------|
+| Agent chat + context summarization | Working |
+| Recommendation cards (events, restaurants, study) | Working |
+| Confirmable proposed actions | Working |
+| Supabase persistence (profiles, plans, jams, reservations) | Working |
+| DynamoDB snapshots | Config-gated |
+| Reservation phone calls (Twilio) | Config-gated |
+| SMS notifications | Disabled (`SMS_NOTIFICATIONS_ENABLED = false`) |
+| Apple Pay / Calendar / Canvas integrations | Stub / mock |
+
+---
+
+## Quick Start (Local Dev)
+
+### Prerequisites
+- Node.js 18+
+- Supabase project (or local Supabase CLI)
+- OpenAI API key
+
+### Setup
+
+```bash
+# 1. Install dependencies
+npm install
+
+# 2. Copy environment template and fill in values
+cp .env.example .env.local
+# edit .env.local with your keys (see Environment Variables section)
+
+# 3. Apply database schema
+# Option A: In Supabase dashboard → SQL editor → run supabase/schema.sql
+# Option B: supabase db push (if using Supabase CLI with supabase/config.toml)
+
+# 4. Start backend
+node backend/server.js
+# or: npm run dev:backend (if script is defined)
+
+# 5. Start frontend (separate terminal)
+npm run dev
+```
+
+Backend runs on `http://localhost:3001` by default. Frontend dev server on `http://localhost:5173`.
+
+### Environment Variables
+
+See `.env.example` and `server/.env.example` for all required variables. Key ones:
+
+```
+OPENAI_API_KEY=              # OpenAI API key for agent chat
+SUPABASE_URL=                # Your Supabase project URL
+SUPABASE_SERVICE_ROLE_KEY=   # Service role key for backend
+VITE_SUPABASE_URL=           # Supabase URL for frontend
+VITE_SUPABASE_ANON_KEY=      # Supabase anon key for frontend
+```
+
+See `AWS_SETUP.md` for App Runner / Cognito / DynamoDB deployment setup.
+
+---
+
+## Key Files
+
+| File | Description |
+|------|-------------|
+| `backend/plannerApi.js` | Core agent backend: routes, context, recommendations, actions, persistence |
+| `src/lib/recommendation/hybrid.js` | Recommendation ranking (behavior, novelty, semantic, exploration) |
+| `scripts/jarvis-autofeed.mjs` | Deterministic prompt traffic generator for testing/eval |
+| `scripts/jarvis-train-1000.mjs` | Larger prompt bank eval script |
+| `.github/workflows/jarvis-nightly.yml` | Nightly Codex automation matrix |
+| `supabase/schema.sql` | Full database schema |
+| `JARVIS_WORKFLOW_IMPLEMENTATION.md` | Agent workflow design notes |
+| `AWS_SETUP.md` | Cloud deployment documentation |
+
+---
+
+## Nightly Automation
+
+The nightly GitHub Actions workflow (`jarvis-nightly.yml`) runs 4 feature tracks in matrix (`recommendations`, `reservations`, `seeding`, `logging`). Each run creates a unique branch, collects log/diff artifacts, and opens a PR only if there are changes.
+
+To enable:
+1. Add repo secret `OPENAI_API_KEY` in GitHub → Settings → Secrets → Actions.
+2. Set Workflow permissions to "Read and write" and enable PR creation.
+3. Merge `jarvis-nightly.yml` to `main`. Manual trigger: Actions → Jarvis Nightly Agents → Run workflow.
+
+---
+
+## Known Limitations
+
+- **Hackathon prototype** — not production infrastructure.
+- SMS notifications are disabled. Twilio calling requires config.
+- Apple Pay, Calendar, and Canvas integrations are stubs or mock data.
+- Recommendation ranking uses local hashed token vectors, not a real embedding/vector DB.
+- No automated test suite (`npm test` is not configured).
+- Nightly Codex workflow proves automation configuration, not production run history.
