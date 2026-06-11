@@ -1,0 +1,5 @@
+task=reco_dummy
+feature=recommendations
+focus=Deterministic demo recommendations API + tests
+run_id=27352967274
+run_attempt=1
