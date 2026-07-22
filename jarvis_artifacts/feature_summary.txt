@@ -1,0 +1,5 @@
+task=reservation_idempotency
+feature=reservations
+focus=Idempotent reservation intents + status endpoints
+run_id=29917997432
+run_attempt=1
